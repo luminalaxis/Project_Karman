@@ -45,8 +45,9 @@ from .vehicle import Vehicle
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
 
-#: Bisection iterations for the implicit model-B limits (bracket / 2^N resolution).
-N_BISECT = 52
+#: Bisection iterations for the implicit model-B limits (bracket / 2^N resolution:
+#: brackets are < 100 m/s², so 2^-44 gives < 1e-11 m/s²).
+N_BISECT = 44
 _TOL_N = 1e-9  # force tolerance [N] in feasibility comparisons
 
 
@@ -240,6 +241,29 @@ class AxleModel(VehicleModel):
             rem_drive = rem_r
         return {"u_f": u_f, "u_r": u_r, "rem_f": rem_f, "rem_r": rem_r, "rem_drive": rem_drive}
 
+    def _axle_capacity(
+        self, v: FloatArray, ax: FloatArray, ay: FloatArray, front: bool
+    ) -> tuple[FloatArray, FloatArray, FloatArray]:
+        """One axle: (lateral capacity, inner-wheel capacity, lateral demand) [N]."""
+        veh = self.vehicle
+        m, h, L = veh.mass_kg, veh.cg_height_m, veh.wheelbase_m
+        fd = self.downforce_n(v)
+        dlong = m * ax * h / L
+        may = m * np.abs(ay)
+        if front:
+            fz = np.maximum(veh.weight_n * veh.b_m / L + veh.aero.balance_front * fd - dlong, 0.0)
+            dfz = veh.lltd_front * may * h / veh.track_front_m
+            req = may * veh.b_m / L
+        else:
+            fz = np.maximum(
+                veh.weight_n * veh.a_m / L + (1.0 - veh.aero.balance_front) * fd + dlong, 0.0
+            )
+            dfz = (1.0 - veh.lltd_front) * may * h / veh.track_rear_m
+            req = may * veh.a_m / L
+        inner = np.maximum(0.5 * fz - dfz, 0.0)
+        c_in = veh.tire.max_lateral_force(inner)
+        return c_in + veh.tire.max_lateral_force(fz - inner), c_in, req
+
     def _brake_ok(self, st: dict[str, FloatArray], fb: FloatArray) -> BoolArray:
         veh = self.vehicle
         if veh.brake_distribution == "fixed":
@@ -257,8 +281,21 @@ class AxleModel(VehicleModel):
         parts: str = "all",
     ) -> BoolArray:
         """Feasibility of (v, ax, ay); ``parts`` = all | front | rear | drive."""
-        st = self._state(v, ax, ay)
         need = self.vehicle.mass_kg * ax + res
+        if parts == "front":  # lean path: front axle only
+            cap, _, req = self._axle_capacity(v, ax, ay, front=True)
+            return req <= cap
+        if parts == "drive" and bool(np.all(need >= 0.0)):  # lean path: rear axle only
+            cap, cap_in, req = self._axle_capacity(v, ax, ay, front=False)
+            u = np.where(cap > 0, req / np.where(cap > 0, cap, 1.0), np.where(req > 0, np.inf, 0))
+            root = np.sqrt(np.clip(1.0 - u * u, 0.0, None))
+            rxy = self.vehicle.tire.mu_lon_lat_ratio
+            if self.vehicle.powertrain.differential == "open":
+                rem = 2.0 * rxy * cap_in * root
+            else:
+                rem = rxy * cap * root
+            return need <= np.minimum(rem, f_pt) + _TOL_N
+        st = self._state(v, ax, ay)
         if parts == "front":
             return st["u_f"] <= 1.0
         if parts == "rear":
@@ -292,7 +329,17 @@ class AxleModel(VehicleModel):
         return lo
 
     def _ax_ref_straight(self, v: FloatArray, res: FloatArray, f_pt: FloatArray) -> FloatArray:
-        """min(0, straight-line max acceleration) (traction or power limited)."""
+        """min(0, straight-line max acceleration) (traction or power limited).
+
+        Depends on v only, so it is evaluated once per *unique* speed (a GGV grid has n_v
+        unique speeds but n_v × n_θ entries) and broadcast back.
+        """
+        v = np.asarray(v, float)
+        vu, inv = np.unique(v, return_inverse=True)
+        if vu.size < v.size:
+            ru, fu = self.resistance_n(vu), self.drive_limit_n(vu)
+            out = self._ax_ref_straight(vu, ru, fu)
+            return out[inv].reshape(v.shape)
         zero = np.zeros_like(v)
         return np.minimum(0.0, self._accel_bisect(v, zero, res, f_pt, -res / self.vehicle.mass_kg))
 

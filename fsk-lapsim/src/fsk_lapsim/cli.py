@@ -13,6 +13,7 @@ import typer
 from . import plots
 from .config import default_config_dir, default_data_dir, resolve_path
 from .events import EVENT_NAMES, EventSetup, run_events
+from .parallel import default_workers
 from .solver import SolverOptions, simulate
 from .vehicle import Vehicle, load_vehicle
 
@@ -29,6 +30,7 @@ ModelOpt = Annotated[str, typer.Option("--model", "-m", help="axle (B) | point_m
 DsOpt = Annotated[float | None, typer.Option("--ds", help="distance step [m]")]
 OutOpt = Annotated[Path | None, typer.Option("--out", "-o", help="output file (CSV/PNG/HTML)")]
 PlotOpt = Annotated[Path | None, typer.Option("--plot", "-p", help="save a PNG figure")]
+WorkersOpt = Annotated[int, typer.Option(help="parallel processes (0 = all CPUs, max 8)")]
 
 pd.set_option("display.width", 200)
 pd.set_option("display.max_columns", 40)
@@ -135,6 +137,7 @@ def sensitivity(
     event: Annotated[str, typer.Option(help="event for plot/equivalence table")] = "autocross",
     out: OutOpt = None,
     plot: PlotOpt = None,
+    workers: WorkersOpt = 0,
 ) -> None:
     """Central-difference sensitivities, equivalence table and measurement priority."""
     from .analysis.sensitivity import (
@@ -147,7 +150,13 @@ def sensitivity(
     from .analysis.uncertainty import Uncertainty
 
     veh, setup, opt = _ctx(vehicle, events, model, ds)
-    res = sens_fn(veh, setup, opt, CORE_PARAMS + (EXTRA_PARAMS if extra else ()))
+    res = sens_fn(
+        veh,
+        setup,
+        opt,
+        CORE_PARAMS + (EXTRA_PARAMS if extra else ()),
+        workers=workers or default_workers(),
+    )
     typer.echo("Δt per display unit [s] (endurance_energy in kWh):")
     piv = res.pivot()
     piv.insert(0, "per", res.table.drop_duplicates("label").set_index("label")["display_unit"])
@@ -173,6 +182,7 @@ def sweep(
     no_candidates: Annotated[bool, typer.Option(help="do not mark candidates")] = False,
     out: OutOpt = None,
     plot: PlotOpt = None,
+    workers: WorkersOpt = 0,
 ) -> None:
     """ClA × CdA grid → autocross time and endurance energy maps."""
     from .aero import components_from_config
@@ -192,7 +202,15 @@ def sweep(
         points += [
             (c.config_id, candidate_vehicle(veh, comps, c)[0]) for c in read_wing_candidates(path)
         ]
-    res = sweep_cla_cda(veh, parse_range(cla), parse_range(cda), setup, opt, points)
+    res = sweep_cla_cda(
+        veh,
+        parse_range(cla),
+        parse_range(cda),
+        setup,
+        opt,
+        points,
+        workers=workers or default_workers(),
+    )
     df = res.to_frame()
     typer.echo("autocross time [s] (rows CdA, cols ClA):")
     typer.echo(
@@ -221,6 +239,7 @@ def compare(
     event: Annotated[list[str] | None, typer.Option("--event")] = None,
     out: OutOpt = None,
     plot: PlotOpt = None,
+    workers: WorkersOpt = 0,
 ) -> None:
     """Rank rear-wing candidates per event (2D results via the rough 2D→3D conversion)."""
     from .aero import components_from_config
@@ -244,6 +263,7 @@ def compare(
         tuple(event) if event else EVENT_NAMES,
         reference,
         retrim_front=retrim_front,
+        workers=workers or default_workers(),
     )
     if cmp.dummy:
         typer.echo("*** DUMMY candidate data — ranking is NOT meaningful ***")
@@ -326,6 +346,7 @@ def report(
     candidates: Annotated[str | None, typer.Option(help="rear-wing CSV")] = None,
     quick: Annotated[bool, typer.Option(help="coarser sweep, core sensitivities only")] = False,
     mc: Annotated[int, typer.Option(help="Monte Carlo samples (0 = skip)")] = 0,
+    workers: WorkersOpt = 0,
 ) -> None:
     """Build the single-file HTML report (Korean)."""
     from .report import ReportOptions, write_report
@@ -337,6 +358,7 @@ def report(
         candidates=candidates,
         quick=quick,
         montecarlo_samples=mc,
+        workers=workers or default_workers(),
     )
     path = write_report(out, opts, lambda m: typer.echo(f"  … {m}"))
     typer.echo(f"saved {path}")
@@ -534,7 +556,7 @@ def score(
         )
         cands = read_wing_candidates(path)
         comps = components_from_config(load_aero_components_config())
-        cmp = compare_candidates(veh, comps, cands, setup, opt)
+        cmp = compare_candidates(veh, comps, cands, setup, opt, workers=default_workers())
         if cmp.dummy:
             typer.echo("*** DUMMY candidate data ***")
         typer.echo(f"\npoints vs {cmp.reference}:")

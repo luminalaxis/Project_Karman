@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from ..events import EventSetup, run_autocross, run_endurance
+from ..parallel import pmap
 from ..solver import SolverOptions
 from ..vehicle import Vehicle, with_params
 
@@ -47,6 +48,10 @@ class SweepResult:
         )
 
 
+def _evaluate_ctx(veh: Vehicle, ctx: dict) -> tuple[float, float, float]:
+    return _evaluate(veh, ctx["setup"], ctx["opt"])
+
+
 def _evaluate(veh: Vehicle, setup: EventSetup, opt: SolverOptions) -> tuple[float, float, float]:
     ac = run_autocross(veh, setup.autocross_track, setup.autocross_start, opt).lap_time_s
     en = run_endurance(
@@ -62,25 +67,30 @@ def sweep_cla_cda(
     setup: EventSetup | None = None,
     options: SolverOptions | None = None,
     points: Sequence[tuple[str, Vehicle]] = (),
+    workers: int = 1,
 ) -> SweepResult:
     """Evaluate autocross time and endurance time/energy on a ClA × CdA grid.
 
     Balance, mass and CG stay at the vehicle's values. ``points`` (label, vehicle) are
     evaluated as they are (e.g. the current car and rear-wing candidates) for overlay.
+    ``workers > 1`` evaluates the grid in parallel processes (same results).
     """
     setup = setup or EventSetup.load()
     opt = options or SolverOptions(ds_m=setup.ds_m)
     cla = np.asarray(cla_values, float)
     cda = np.asarray(cda_values, float)
     shape = (cda.size, cla.size)
-    ac, et, ee = np.empty(shape), np.empty(shape), np.empty(shape)
-    for i, cd in enumerate(cda):
-        for j, cl in enumerate(cla):
-            v = with_params(vehicle, {"aero.cla_m2": float(cl), "aero.cda_m2": float(cd)})
-            ac[i, j], et[i, j], ee[i, j] = _evaluate(v, setup, opt)
+    grid = [
+        with_params(vehicle, {"aero.cla_m2": float(cl), "aero.cda_m2": float(cd)})
+        for cd in cda
+        for cl in cla
+    ]
+    pts = [veh for _, veh in points]
+    vals = pmap(_evaluate_ctx, grid + pts, {"setup": setup, "opt": opt}, workers)
+    arr = np.array(vals[: len(grid)], float).reshape(*shape, 3)
+    ac, et, ee = arr[..., 0], arr[..., 1], arr[..., 2]
     rows = []
-    for label, veh in points:
-        a, t, e = _evaluate(veh, setup, opt)
+    for (label, veh), (a, t, e) in zip(points, vals[len(grid) :], strict=True):
         rows.append(
             {
                 "label": label,

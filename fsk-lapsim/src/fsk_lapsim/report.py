@@ -72,6 +72,7 @@ class ReportOptions:
     reference_track: str | None = "tracks/fsk2026_endurance.yaml"
     montecarlo_samples: int = 0
     quick: bool = False
+    workers: int = 1
 
     def __post_init__(self) -> None:
         if self.quick:
@@ -132,7 +133,7 @@ def build_report_data(
     ev = run_events(veh, setup, sopt)
     say("sensitivity")
     params = CORE_PARAMS + (EXTRA_PARAMS if opts.extra_sensitivity else ())
-    sens = sensitivity(veh, setup, sopt, params)
+    sens = sensitivity(veh, setup, sopt, params, workers=opts.workers)
     unc = Uncertainty.load(opts.uncertainty)
     prio = measurement_priority(sens, unc.sigmas())
     say("rear-wing comparison")
@@ -142,14 +143,16 @@ def build_report_data(
         else (default_data_dir() / "rear_wing_candidates_DUMMY.csv")
     )
     cands = read_wing_candidates(cand_path)
-    cmp = compare_candidates(veh, comps, cands, setup, sopt)
+    cmp = compare_candidates(veh, comps, cands, setup, sopt, workers=opts.workers)
     rear = next(c for c in comps if c.name == "rear_wing")
     wtab = candidate_table(cands, rear, WingConversion())
     say("sweep")
     points = [("current", veh)] + [
         (c.config_id, candidate_vehicle(veh, comps, c)[0]) for c in cands
     ]
-    sw = sweep_cla_cda(veh, opts.sweep_cla, opts.sweep_cda, setup, sopt, points)
+    sw = sweep_cla_cda(
+        veh, opts.sweep_cla, opts.sweep_cda, setup, sopt, points, workers=opts.workers
+    )
     say("balance")
     bal = optimise_balance(veh, setup, sopt, n_scan=9 if opts.quick else 15)
     say("active aero")

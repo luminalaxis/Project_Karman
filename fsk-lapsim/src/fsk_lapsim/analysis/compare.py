@@ -9,6 +9,7 @@ import pandas as pd
 
 from ..aero import AeroComponent, synthesize
 from ..events import EVENT_NAMES, EventSetup, run_events
+from ..parallel import pmap
 from ..solver import SolverOptions
 from ..vehicle import Vehicle
 from ..wing import WingCandidate, WingConversion, candidate_vehicle
@@ -43,6 +44,7 @@ def compare_candidates(
     conv: WingConversion | None = None,
     retrim_front: bool = False,
     include_baseline: bool = True,
+    workers: int = 1,
 ) -> Comparison:
     """Simulate every candidate and tabulate times, deltas to ``reference`` and ranks.
 
@@ -58,6 +60,7 @@ def compare_candidates(
         conv: 2D→3D conversion defaults.
         retrim_front: Rescale the front wing to keep the baseline aero balance.
         include_baseline: Add a row for the unmodified baseline package.
+        workers: Parallel processes (results identical to the serial run).
     """
     if not candidates:
         raise ValueError("no candidates")
@@ -101,10 +104,11 @@ def compare_candidates(
                 },
             )
         )
-    for cid, veh, info in variants:
+    ctx = {"setup": setup, "options": options, "events": events}
+    metrics = pmap(_metrics_ctx, [veh for _, veh, _ in variants], ctx, workers)
+    for (cid, veh, info), met in zip(variants, metrics, strict=True):
         info = dict(info)
         info.pop("_bal", None)
-        res = run_events(veh, setup, options, events)
         row = {
             "config_id": cid,
             **info,
@@ -114,7 +118,7 @@ def compare_candidates(
             "mass_kg": veh.mass_kg,
             "cg_height_m": veh.cg_height_m,
         }
-        row.update(res.metrics())
+        row.update(met)
         rows.append(row)
     df = pd.DataFrame(rows)
     ref_row = df.loc[df["config_id"] == ref].iloc[0]
@@ -128,6 +132,10 @@ def compare_candidates(
     if "endurance" in events:
         df["d_endurance_energy_kwh"] = df["endurance_energy_kwh"] - ref_row["endurance_energy_kwh"]
     return Comparison(df, ref, tuple(events), bool(df["dummy"].any()))
+
+
+def _metrics_ctx(veh: Vehicle, ctx: dict) -> dict[str, float]:
+    return run_events(veh, ctx["setup"], ctx["options"], ctx["events"]).metrics()
 
 
 def _rw(components: Sequence[AeroComponent], name: str) -> AeroComponent:

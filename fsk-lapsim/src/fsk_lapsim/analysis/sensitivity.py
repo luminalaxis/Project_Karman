@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from ..events import EVENT_NAMES, EventResults, EventSetup, run_events
+from ..parallel import pmap
 from ..solver import SolverOptions
 from ..vehicle import Vehicle, get_param, with_param
 
@@ -97,6 +98,12 @@ def _metric_values(res: EventResults, events: Sequence[str]) -> dict[str, float]
     return out
 
 
+def _metrics_ctx(veh: Vehicle, ctx: dict) -> dict[str, float]:
+    return _metric_values(
+        run_events(veh, ctx["setup"], ctx["options"], ctx["events"]), ctx["events"]
+    )
+
+
 def sensitivity(
     vehicle: Vehicle,
     setup: EventSetup | None = None,
@@ -104,12 +111,18 @@ def sensitivity(
     params: Sequence[ParamSpec] = CORE_PARAMS,
     events: tuple[str, ...] = EVENT_NAMES,
     runner: Runner | None = None,
+    workers: int = 1,
 ) -> SensitivityResult:
-    """Central-difference sensitivities for every parameter and event."""
+    """Central-difference sensitivities for every parameter and event.
+
+    ``workers > 1`` evaluates the perturbed vehicles in parallel processes (ignored when a
+    custom ``runner`` is given).
+    """
     setup = setup or EventSetup.load()
     run: Runner = runner or (lambda v: run_events(v, setup, options, events))
     base = run(vehicle)
-    rows = []
+    bounds: list[tuple[float, float, float]] = []
+    variants: list[Vehicle] = []
     for spec in params:
         p0 = float(get_param(vehicle, spec.path))
         h = spec.step
@@ -121,8 +134,17 @@ def sensitivity(
             "powertrain.efficiency",
         ):
             lo, hi = max(lo, 0.0), min(hi, 1.0)
-        m_hi = _metric_values(run(with_param(vehicle, spec.path, hi)), events)
-        m_lo = _metric_values(run(with_param(vehicle, spec.path, lo)), events)
+        bounds.append((p0, lo, hi))
+        variants += [with_param(vehicle, spec.path, hi), with_param(vehicle, spec.path, lo)]
+    if runner is None and workers > 1:
+        ctx = {"setup": setup, "options": options, "events": events}
+        mets = pmap(_metrics_ctx, variants, ctx, workers)
+    else:
+        mets = [_metric_values(run(v), events) for v in variants]
+    rows = []
+    for k, spec in enumerate(params):
+        p0, lo, hi = bounds[k]
+        m_hi, m_lo = mets[2 * k], mets[2 * k + 1]
         for key in m_hi:
             d = (m_hi[key] - m_lo[key]) / (hi - lo)
             rows.append(
