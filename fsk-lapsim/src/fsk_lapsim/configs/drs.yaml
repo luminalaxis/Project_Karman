@@ -1,0 +1,14 @@
+# 능동 공력 (DRS) 2상태 설정. 저항 저감 상태 = 리어윙 플랩 개방.
+# 모든 수치는 가정값 — 플랩 개방 시 계수 변화는 CFD, 전환 시간은 액추에이터 실측으로 교체.
+components_file: aero_components.yaml   # 리어윙 기여분(ClA, CdA, x_cp, z_cp)을 읽는 곳
+rear_component: rear_wing
+cl_reduction_fraction: {value: 0.65, unit: "-", assumed: true, note: "개방 시 리어윙 ClA 감소 비율"}
+cd_reduction_fraction: {value: 0.55, unit: "-", assumed: true, note: "개방 시 리어윙 CdA 감소 비율"}
+transition_time_s: {value: 0.25, unit: s, assumed: true, note: "열림/닫힘 각각, 이 시간 동안 계수 선형 보간"}
+ay_threshold_mps2: {value: 4.9, unit: m/s^2, assumed: true, note: "|ay| 가 이보다 작을 때만 개방 (0.5 g)"}
+min_open_time_s: {value: 0.3, unit: s, assumed: true, note: "완전 개방 유지 시간이 이보다 짧은 구간은 열지 않음"}
+# min_speed_mps: 지정하지 않으면 자동 = 직선 최대가속에서 개방 상태가 닫힌 상태보다 빨라지는 속도
+#   (그보다 느리면 트랙션 한계라 리어 다운포스를 잃는 개방이 오히려 손해). 고정값을 쓰려면 아래 주석 해제.
+# min_speed_mps: {value: 20.0, unit: m/s, assumed: true}
+require_full_throttle: true   # 최대 가속(전진 패스가 한계)일 때만 개방
+iterations: 4                 # 개방 구간 ↔ 속도 프로파일 반복 횟수

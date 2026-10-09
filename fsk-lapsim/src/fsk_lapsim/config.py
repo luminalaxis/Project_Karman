@@ -162,6 +162,21 @@ class EventsConfig(_Section):
     ds_m: Param = Field(default_factory=lambda: Param(value=0.25))
 
 
+class DRSConfig(_Section):
+    """``drs.yaml``: two-state active rear wing."""
+
+    components_file: str = "aero_components.yaml"
+    rear_component: str = "rear_wing"
+    cl_reduction_fraction: Param
+    cd_reduction_fraction: Param
+    transition_time_s: Param
+    ay_threshold_mps2: Param
+    min_open_time_s: Param = Field(default_factory=lambda: Param(value=0.0))
+    min_speed_mps: Param | None = None
+    require_full_throttle: bool = True
+    iterations: int = 4
+
+
 def _read_yaml(path: Path) -> dict[str, Any]:
     with open(path, encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
@@ -217,6 +232,12 @@ def load_events_config(path: str | Path | None = None) -> EventsConfig:
     """Load and validate ``events.yaml`` (default: the bundled example)."""
     p = resolve_path(path) if path is not None else default_config_dir() / "events.yaml"
     return EventsConfig.model_validate(_read_yaml(p))
+
+
+def load_drs_config(path: str | Path | None = None) -> DRSConfig:
+    """Load and validate ``drs.yaml`` (default: the bundled example)."""
+    p = resolve_path(path) if path is not None else default_config_dir() / "drs.yaml"
+    return DRSConfig.model_validate(_read_yaml(p))
 
 
 def load_yaml(path: str | Path) -> dict[str, Any]:
