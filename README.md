@@ -60,26 +60,26 @@ Streamlit 웹 앱. 사이드바에서 차량/트랙 파일 선택·업로드, �
 * 장치 이름은 자유 (`body` 는 공력 장치가 아닌 기본 드래그용). 옛 형식 `{"ClA", "CdA", "balance_front"}` 도 읽는다.
 * `balance` / `--bal` 재트림은 가장 앞·가장 뒤 장치의 ClA 를 (CdA 도 같은 비율로) 조절해 총 ClA 를 유지한 채 목표 밸런스를 맞춘다 (윙 각도 조정에 해당).
 
-## 출력 예 (기본 차량 × FSK 2026 Endurance, 850.8 m, 시계방향)
+## 출력 예 (기본 차량 × FSK 2026 Endurance, 850.8 m, 시계방향, 중심선)
 ```
-lap time         :   54.842 s
-max lat accel    :   2.52 g
-corner limited by: front axle 8.93 s, rear axle 0.00 s
+lap time         :   56.911 s          (--line best: 54.092 s, 831.6 m)
+max lat accel    :   2.34 g
+corner limited by: front axle 6.10 s, rear axle 0.07 s
 
-+1 % ClA             :    -27.4 ms
-+1 % CdA             :     +6.6 ms
-exchange rate        : +1 % drag is paid back by +0.24 % downforce
++1 % ClA             :    -28.7 ms
++1 % CdA             :     +8.2 ms
+exchange rate        : +1 % drag is paid back by +0.29 % downforce
 
 per device (absolute change on that device only; balance shifts with it):
   device       +0.1 ClA   +0.1 CdA  break-even L/D
-  front        -117.2ms    +39.3ms            0.34
-  mid           -73.8ms    +34.1ms            0.46
-  rear          -39.6ms    +62.5ms            1.58
-  body          -77.2ms    +46.3ms            0.60
+  front        -160.3ms    +42.9ms            0.27
+  mid           -77.3ms    +33.9ms            0.44
+  rear           -9.9ms    +86.6ms            8.78
+  body          -81.2ms    +55.5ms            0.68
 ```
-읽는 법: 기본 차량은 코너에서 **앞축이 먼저 한계** → 프론트 다운포스 0.1 이 리어의 3배 가치.
-리어 윙은 ΔClA/ΔCdA > 1.58 이어야 이득 (리어 다운포스는 밸런스를 뒤로 보내고, 높은 드래그는 앞축 하중을 더 덜어냄).
-`balance` 스윕 최적점은 약 50 % F.
+읽는 법: 기본 차량은 코너에서 **앞축이 먼저 한계** → 프론트 다운포스 0.1 이 리어의 16배 가치.
+리어 윙은 ΔClA/ΔCdA > 8.8 이어야 이득 (리어 다운포스는 밸런스를 뒤로 보내고, 높은 드래그는 앞축 하중을 더 덜어냄).
+좌우 하중이동(LLTD 앞 53 %)과 요 관성이 들어가면서 앞축 의존도가 더 커졌다.
 
 ## 공력 장치 성능 목표치 자동 계산 (`forces`, `targets`)
 **`forces`** — 현재 차량의 장치별 하중표: 기준 속도별 다운포스/드래그 [N], 랩 평균(시간 가중) 하중, 최대 다운포스,
@@ -96,16 +96,16 @@ per device (absolute change on that device only; balance shifts with it):
 출력 (기본 차량, FSK 2026, 밸런스 45–49 %):
 ```
   device    ClA now  target      Δ  CdA now  target   L/D    F %  +0.1ClA  +0.1CdA  min L/D  note
-  front        1.20    1.80  +0.60     0.33    0.54  3.36  132.7    -64ms    +46ms     0.71  at ClA_max (package limit)
-  mid          1.05    1.60  +0.55     0.15    0.25  6.42   44.4    -50ms    +44ms     0.89  at ClA_max (package limit)
-  rear         1.40    1.99  +0.59     0.52    0.78  2.54  -24.2    -39ms    +53ms     1.35  at ClA_max (package limit)
-  total        3.65    5.39  +1.74     1.32    1.89  2.85   48.6
-  lap time       : 54.842 s -> 54.211 s (-630.3 ms)
+  front        1.20    1.30  +0.10     0.33    0.36  3.62  132.7   -123ms    +42ms     0.34  set by balance window
+  mid          1.05    1.60  +0.55     0.15    0.25  6.42   44.4    -67ms    +36ms     0.53  at ClA_max (package limit)
+  rear         1.40    1.39  -0.01     0.52    0.52  2.69  -24.2    -24ms    +67ms     2.83  set by balance window
+  total        3.65    4.29  +0.64     1.32    1.44  2.97   49.0
+  lap time       : 56.911 s -> 56.450 s (-461.3 ms)
 ```
 * `target` ClA/CdA = 장치 설계 목표. 아래 하중표에 같은 목표를 속도별 다운포스/드래그 [N] 로 환산해 준다 (풍동·CFD 목표값으로 사용).
 * `+0.1ClA`/`+0.1CdA` = 목표점에서 그 장치의 한계 가치, `min L/D` = 그 장치를 더 바꿀 때 ΔClA/ΔCdA 가 넘어야 하는 값.
 * `note` 가 `at ClA_max` 면 패키징이 병목 (상한을 풀면 더 빨라짐), `optimum` 이면 내부 최적점, `set by balance window` 면 밸런스가 병목.
-* 기본 차량에서 리어만 최적화하면 현재 1.40 이 이미 최적 — 앞축 한계 차량이라 리어만 늘리면 밸런스가 뒤로 가서 손해.
+* 밸런스 창 상한(49 %)에서 프론트·리어가 묶이고, 언더트레이(mid)는 패키징 상한까지 — 밸런스 영향이 작은 mid 가 가장 싸게 다운포스를 더한다.
 
 ## 모델
 | 항목 | 내용 |
