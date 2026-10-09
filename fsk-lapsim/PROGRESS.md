@@ -21,7 +21,8 @@ ruff check src tests
 | P4 | 파워트레인·에너지 + 테스트 8 | 완료 |
 | P5 | 공력 부품 합성 + 2D→3D + 리어윙 비교 | 완료 |
 | P6 | 이벤트 4종 | 완료 |
-| P7 | 분석 (sensitivity, sweep, balance-opt) | 다음 |
+| P7 | 분석 (sensitivity, sweep, balance-opt) | 완료 |
+| P8 | 능동 공력 (DRS) | 다음 |
 
 ## 완료 내용
 ### P0
@@ -78,5 +79,16 @@ ruff check src tests
 - 관찰: 엔듀런스 에너지 8.7 kWh 는 FS EV 어큐뮬레이터 일반 용량(6–8 kWh)보다 크다 → 가정 CdA 1.4·질량 320 kg 영향.
   실제 팩 용량이 정해지면 `endurance_max_power_w` 로 에너지 관리를 시뮬레이션해야 한다.
 
+### P7
+- `analysis/sensitivity.py`: 중앙차분 민감도 (지시서 7개 + 우선순위용 7개 추가 파라미터), 표시 단위(0.1 m², 1 kg, 1 cm, 1 %p, 1 kW),
+  등가 환산표, "먼저 실측할 파라미터" 순위 (|dt/dp|·σ, σ = `configs/uncertainty.yaml`).
+- `analysis/sweep.py`: ClA×CdA 격자 → 오토크로스 시간, 엔듀런스 시간·에너지 + 표시점(현재 차량·후보).
+- `analysis/balance_opt.py`: 스캔 + bounded Brent, 목적함수 autocross / endurance_lap / combined, 최적점 축별 한계.
+- `analysis/uncertainty.py` + `configs/uncertainty.yaml`: 정규/균등 분포, 클립, 2D→3D 계수 불확실성, 후보별 CFD 오차.
+- 결과 (가정값 기반, 오토크로스): ClA +0.1 m² → −0.050 s, CdA +0.1 m² → +0.037 s, +1 kg → +0.031 s,
+  CG +1 cm → +0.067 s, μ0 +0.01 → −0.178 s, +1 kW → −0.018 s. 등가: 1 kg ≈ ClA −0.061 m² ≈ CdA +0.083 m².
+  밸런스 최적 43.3 % (45 % 대비 −0.020 s, 두 축 동시 포화점 — 실차는 안정성 마진 필요).
+- 실측 우선순위 (시간 기준): μ0 > 하중민감도 k > 질량 > ClA > CG 높이 > 밸런스 > CdA > 효율 … (에너지 기준은 μ0·효율·k·CdA 순).
+
 ## 다음 할 일
-- P7: sensitivity (중앙차분, 등가 환산표), sweep (ClA×CdA 격자 → 오토크로스 시간·엔듀런스 에너지), balance-opt.
+- P8: DRS 두 상태 + 전환 시간 보간 + 전환 조건 + 이벤트별 이득·전환 횟수·개방 비율·제동 전 닫힘 명령 리드.
