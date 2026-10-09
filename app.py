@@ -15,7 +15,7 @@ import streamlit as st
 
 from lapsim import figures, study, targets
 from lapsim.channels import channels
-from lapsim.line import best_line, racing_line
+from lapsim.line import driven_path
 from lapsim.solver import PHASES, simulate
 from lapsim.track import track_from_dict
 from lapsim.vehicle import G, vehicle_from_dict, vehicle_to_dict
@@ -35,14 +35,10 @@ def load_track_cached(text: str, name: str, ds: float, smooth: float):
 
 
 @st.cache_data(show_spinner=False)
-def line_cached(text, name, ds, smooth, method, car_width, margin, track_width, car_json):
+def line_cached(text, name, ds, smooth, method, car_width, margin, track_width, slalom, car_json):
     trk = load_track_cached(text, name, ds, smooth)
-    if method == "center":
-        return trk, {}
-    kw = dict(default_width=track_width, smooth_m=smooth)
-    if method == "best":
-        return best_line(vehicle_from_dict(json.loads(car_json)), trk, car_width, margin, **kw)
-    return racing_line(trk, method, car_width, margin, **kw), {}
+    return driven_path(vehicle_from_dict(json.loads(car_json)), trk, method, car_width, margin,
+                       default_width=track_width, slalom=slalom, smooth_m=smooth)
 
 
 @st.cache_data(show_spinner=False)
@@ -89,6 +85,8 @@ line_mode = st.sidebar.radio("경로", list(LINE_LABELS), format_func=LINE_LABEL
 car_width = st.sidebar.number_input("차폭 [m]", value=1.45, step=0.05)
 line_margin = st.sidebar.number_input("트랙 경계 여유 [m]", value=0.25, step=0.05)
 track_width = st.sidebar.number_input("트랙 폭 (파일에 없을 때) [m]", value=4.0, step=0.5)
+use_slalom = st.sidebar.checkbox("슬라럼 콘 S자 통과", value=True,
+                                 help="트랙 JSON의 center 콘(슬라럼)을 좌우 번갈아 통과. 첫 방향은 랩타임으로 선택")
 with st.sidebar.expander("이산화"):
     ds = st.number_input("격자 간격 ds [m]", value=0.5, step=0.1, min_value=0.1)
     smooth = st.number_input("센터라인 스무딩 [m]", value=4.0, step=0.5, min_value=0.5)
@@ -205,18 +203,23 @@ car_json = car_json_of(car_dict)
 
 # ---- track / path ------------------------------------------------------------
 try:
-    with st.spinner("트랙 / 주행 라인 계산 중… (최소 곡률 라인은 수십 초 걸릴 수 있어요)"):
+    with st.spinner("트랙 / 주행 경로 계산 중… (슬라럼 방향 선택, 최소 곡률 라인은 수십 초 걸릴 수 있어요)"):
         limits = load_track_cached(track_text, track_name, ds, smooth)
-        track, line_times = line_cached(track_text, track_name, ds, smooth, line_mode, car_width,
-                                        line_margin, track_width,
-                                        car_json if line_mode == "best" else "")
+        track, path_info = line_cached(track_text, track_name, ds, smooth, line_mode, car_width,
+                                       line_margin, track_width, use_slalom, car_json)
 except Exception as e:  # noqa: BLE001
     st.error(f"트랙 오류: {e}")
     st.stop()
-track_key = f"{track_name}|{hash(track_text)}|{ds}|{smooth}|{line_mode}|{car_width}|{line_margin}|{track_width}"
+track_key = (f"{track_name}|{hash(track_text)}|{ds}|{smooth}|{line_mode}|{car_width}|{line_margin}|"
+             f"{track_width}|{use_slalom}|{hash(car_json)}")
 st.sidebar.caption(f"**{track.name}** · {track.length:.1f} m · {'폐회로' if track.closed else '개회로'}")
-if line_times:
-    st.sidebar.caption(" · ".join(f"{m}: {t:.3f} s" for m, t in line_times.items()))
+if path_info.get("slalom_sides"):
+    sides = " | ".join("".join("L" if s > 0 else "R" for s in g) for g in path_info["slalom_sides"])
+    st.sidebar.caption(f"슬라럼 {len(path_info['slalom_sides'])}개 · 콘 기준 통과 방향 {sides} · "
+                       f"최소 콘 거리 {np.abs(path_info['cone_clearance']).min():.2f} m "
+                       f"(목표 {path_info['pass_distance']:.2f} m)")
+if path_info.get("line_times"):
+    st.sidebar.caption(" · ".join(f"{m}: {t:.3f} s" for m, t in path_info["line_times"].items()))
 
 # ---- lap result ----------------------------------------------------------------
 with tab_lap:

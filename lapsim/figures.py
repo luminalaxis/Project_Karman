@@ -51,6 +51,9 @@ def track_map(runs: dict, limits=None, channel: str = "speed_kmh", unit: str = "
         for x, y in ((xl, yl), (xr, yr)):
             fig.add_scatter(x=np.append(x, x[0]), y=np.append(y, y[0]), mode="lines",
                             line=dict(color="#adb5bd", width=1), showlegend=False, hoverinfo="skip")
+    if limits is not None and limits.slalom_cones is not None:
+        fig.add_scatter(x=limits.slalom_cones[:, 0], y=limits.slalom_cones[:, 1], mode="markers",
+                        name="slalom cones", marker=dict(size=9, color="#2b8a3e", symbol="triangle-up"))
     labels = list(runs)
     for i, k in enumerate(labels[1:], start=1):
         res = runs[k][1]

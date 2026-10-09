@@ -62,7 +62,7 @@ Streamlit 웹 앱. 사이드바에서 차량/트랙 파일 선택·업로드, �
 
 ## 출력 예 (기본 차량 × FSK 2026 Endurance, 850.8 m, 시계방향, 중심선)
 ```
-lap time         :   56.911 s          (--line best: 54.092 s, 831.6 m)
+lap time         :   56.911 s          (raw centerline, no slalom)
 max lat accel    :   2.34 g
 corner limited by: front axle 6.10 s, rear axle 0.07 s
 
@@ -107,6 +107,18 @@ per device (absolute change on that device only; balance shifts with it):
 * `note` 가 `at ClA_max` 면 패키징이 병목 (상한을 풀면 더 빨라짐), `optimum` 이면 내부 최적점, `set by balance window` 면 밸런스가 병목.
 * 밸런스 창 상한(49 %)에서 프론트·리어가 묶이고, 언더트레이(mid)는 패키징 상한까지 — 밸런스 영향이 작은 mid 가 가장 싸게 다운포스를 더한다.
 
+## 슬라럼 (S자 통과)
+트랙 JSON 의 슬라럼 콘(cone2track `"side": "center"`, 또는 `"slalom": [[x, y], ...]`)은 **좌우를 번갈아** 통과한다.
+* 콘을 트랙 경로에 투영하고 간격 15 m 이내끼리 한 슬라럼으로 묶음 (FSK 2026: 3·4·2·2개, s ≈ 151 / 457 / 520 / 819 m)
+* 통과 거리 d = 차폭/2 + 콘 반경(0.15 m) + 여유(`--line-margin`): 경로가 콘 중심에서 d 이상 떨어지도록, 비스듬히
+  지나가는 각도까지 고려해 실제(유클리드) 거리로 보정
+* 각 슬라럼의 첫 통과 방향은 랩타임으로 선택 (그룹별 탐욕 탐색)
+* 중심선 모드: 슬라럼 구간만 S자로 재경로, 주행 라인 모드: 슬라럼 S자는 고정하고 나머지 구간만 최적화
+* `--no-slalom` (GUI: 사이드바 체크박스) 로 끌 수 있다
+
+FSK 2026 (기본 차량): 중심선 56.17 s → 슬라럼 포함 **59.45 s**, 주행 라인 54.79 s → 슬라럼 포함 **58.31 s**.
+콘 간격이 5–7 m 로 좁아 슬라럼 속도는 20–30 km/h.
+
 ## 모델
 | 항목 | 내용 |
 |---|---|
@@ -120,12 +132,14 @@ per device (absolute change on that device only; balance shifts with it):
 | 가속 | min(모터 토크, 80 kW, 후륜 잔여 그립) − 드래그 − 구름저항, 하중이 빠지는 앞축 횡그립 한계로 제한 |
 | 제동 | 4륜, 축별 잔여 그립 (이상적 배분) + 드래그, 하중이 빠지는 뒤축 횡그립 한계로 제한. a_x ↔ 하중이동은 할선법으로 수렴 |
 | 랩 | v = min(전진, 후진). 닫힌 코스는 가장 느린 정점에서 시작하는 플라잉 랩, 열린 코스는 정지 출발 |
-| 주행 라인 | `mincurv`: 정확한 3점 곡률의 ∫κ² ds 최소화 (가우스-뉴턴 + 박스 QP), `compromise`: 기준 격자 2차 차분 최소화 (곡률과 경로 길이 절충), `best`: 둘 다 돌려 빠른 것 |
+| 주행 경로 | 2 m 매듭점의 횡오프셋을 최적화하고 C2 큐빅 스플라인으로 재구성 (중심선 모드도 같은 방식, 오프셋 0). `mincurv`: 정확한 3점 곡률의 ∫κ² ds 최소화 (가우스-뉴턴 + 박스 QP), `compromise`: 기준 격자 2차 차분 최소화 (곡률과 경로 길이 절충), `best`: 둘 다 돌려 빠른 것. FSK 는 헤어핀이 지배적이라 `compromise` 가 더 빠름 |
 
 남은 단순화 (QSS 특성상): 댐퍼·서스펜션 과도 응답 없음 (하중이동은 정상상태), 요 관성은 곡률 변화율 기반 준정적 근사,
 주행 라인은 최소 시간 최적해가 아님 (최소 곡률/절충), 타이어는 마찰 타원 (슬립·온도 모델 없음), 배터리 전압 강하·열 디레이팅 없음.
 공력 밸런스 최적점은 "두 축 동시 포화"점이라 실제 차는 안정성 마진만큼 뒤로 둔다.
-센터라인 스무딩(`--smooth`)이 크면 헤어핀이 펴져 랩타임이 크게 빨라지므로(FSK: 4 m 56.9 s, 8 m 53.6 s) 주행 라인 옵션으로 비교할 것.
+센터라인 스무딩(`--smooth`)이 크면 헤어핀이 펴져 랩타임이 크게 빨라진다(원본 중심선 FSK: 4 m 56.9 s, 8 m 53.6 s).
+CLI/GUI 의 모든 경로는 같은 스플라인 재구성과 같은 곡률 평활을 쓰므로 경로끼리의 비교는 공정하다
+(재구성이 측량 노이즈를 걸러 중심선 길이는 850.8 → 845 m, 랩은 56.9 → 56.2 s).
 
 ## 파일
 ```
@@ -133,7 +147,8 @@ lapsim/vehicle.py   차량·타이어·공력 장치(AeroDevice)·EV 파워트�
 lapsim/track.py     트랙 JSON 로더 → 등간격 곡률 프로파일
 lapsim/physics.py   공통 물리 코어 (공력·차고·축하중·바퀴별 그립·요 관성)
 lapsim/solver.py    QSS 솔버 (simulate → LapResult)
-lapsim/line.py      주행 라인 (mincurv / compromise / best)
+lapsim/line.py      주행 경로 (driven_path: 중심선 / mincurv / compromise / best, 슬라럼 포함)
+lapsim/slalom.py    슬라럼 콘 그룹화, 통과 방향, 통과 거리
 lapsim/channels.py  랩 채널 계산, CSV 내보내기, 누적 시간차
 lapsim/figures.py   GUI 용 plotly 그래프
 app.py              Streamlit GUI

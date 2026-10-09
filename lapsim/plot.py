@@ -65,6 +65,8 @@ def plot_lap(runs: dict, path, track=None):
         (xl, yl), (xr, yr) = track.edges()
         ax_map.plot(xl, yl, color="0.6", lw=0.7)
         ax_map.plot(xr, yr, color="0.6", lw=0.7)
+    if track is not None and track.slalom_cones is not None:
+        ax_map.plot(*track.slalom_cones.T, "o", color="#2b8a3e", ms=5, zorder=5, label="slalom cones")
     sc = ax_map.scatter(res0.x, res0.y, c=ch0["speed_kmh"], s=4, cmap="viridis", zorder=3)
     ax_map.plot(res0.x[0], res0.y[0], "r>", ms=8, zorder=4)
     ax_map.set_aspect("equal")

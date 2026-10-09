@@ -21,7 +21,7 @@ import numpy as np
 
 from . import study, targets
 from .channels import channels, export_csv
-from .line import best_line, racing_line
+from .line import driven_path
 from .solver import simulate
 from .track import load_track
 from .vehicle import load_vehicle, save_vehicle
@@ -103,6 +103,8 @@ def main(argv=None):
                          "compromise line, or best = whichever of the two lines is faster")
     ap.add_argument("--car-width", type=float, default=1.45, help="racing line: car width [m]")
     ap.add_argument("--line-margin", type=float, default=0.25, help="racing line: margin to limits [m]")
+    ap.add_argument("--no-slalom", action="store_true",
+                    help="ignore slalom cones (drive straight through them)")
     ap.add_argument("--track-width", type=float, default=None,
                     help="racing line: track width [m] when the track file has none")
     args = ap.parse_args(argv)
@@ -110,13 +112,16 @@ def main(argv=None):
     veh = _set_overrides(load_vehicle(args.car), args.set)
     track = load_track(args.track, ds=args.ds, smooth_m=args.smooth)
     limits = track
-    if args.line == "best":
-        track, times = best_line(veh, track, args.car_width, args.line_margin,
-                                 default_width=args.track_width, smooth_m=args.smooth)
-        print("racing lines: " + ", ".join(f"{m} {t:.3f} s" for m, t in times.items()))
-    elif args.line != "center":
-        track = racing_line(track, args.line, args.car_width, args.line_margin,
-                            default_width=args.track_width, smooth_m=args.smooth)
+    track, info = driven_path(veh, track, args.line, args.car_width, args.line_margin,
+                              default_width=args.track_width, slalom=not args.no_slalom,
+                              smooth_m=args.smooth)
+    if info["slalom_sides"]:
+        sides = " | ".join("".join("L" if s > 0 else "R" for s in g) for g in info["slalom_sides"])
+        print(f"slalom: {len(info['slalom_sides'])} groups, car keeps to the {sides} of each cone "
+              f"(min cone distance {np.abs(info['cone_clearance']).min():.2f} m, "
+              f"target {info['pass_distance']:.2f} m)")
+    if info["line_times"]:
+        print("racing lines: " + ", ".join(f"{m} {t:.3f} s" for m, t in info["line_times"].items()))
     kw = {"v_start": 1e3} if args.flying else {}
     print(f"car   : {veh.name}  (m {veh.mass:.0f} kg)")
     print(veh.aero.table())

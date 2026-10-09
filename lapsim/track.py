@@ -15,6 +15,9 @@ Supported JSON layouts (auto-detected):
 Track width (for the racing line): per-point ``widthL``/``widthR`` (cone2track), ``width_left`` /
 ``width_right`` lists for the x/y layout, distances to the cones, or a scalar ``"width"``.
 
+Slalom cones (driven through in an S): cone2track cones with ``"side": "center"`` or
+``"slalom": [[x, y], ...]``.
+
 Optional keys: ``"closed"`` (bool, default True for point/cone layouts, False for
 segments and curvature), ``"name"``, driving direction ``"direction"`` /
 ``"meta": {"run": "clockwise"}`` or ``"reverse": true``.  Points may be ``[x, y]`` pairs or ``{"x":, "y":}`` dicts.
@@ -41,6 +44,7 @@ class Track:
     closed: bool
     width_left: np.ndarray | None = None   # usable width left of the path [m]
     width_right: np.ndarray | None = None  # usable width right of the path [m]
+    slalom_cones: np.ndarray | None = None  # (k, 2) cones to weave through (cone2track "center")
 
     @property
     def ds(self) -> float:
@@ -76,7 +80,8 @@ def _points(raw) -> np.ndarray:
 
 
 def _side_cones(data):
-    """Split a ``"cones": [{"side": "left", "x"/"y" or "lat"/"lng"}, ...]`` list."""
+    """Split a ``"cones": [{"side": "left", "x"/"y" or "lat"/"lng"}, ...]`` list into
+    (left, right, center); "center" cones are slalom cones the car weaves through."""
     cones = data["cones"]
     if all("x" in c for c in cones):
         xy = np.array([[c["x"], c["y"]] for c in cones], dtype=float)
@@ -89,7 +94,7 @@ def _side_cones(data):
         mlng = proj.get("mlng", 111_320.0 * np.cos(np.radians(lat0)))
         xy = np.column_stack([(lng - lng0) * mlng, (lat - lat0) * mlat])
     side = np.array([str(c.get("side", "")).lower() for c in cones])
-    return xy[side == "left"], xy[side == "right"]
+    return xy[side == "left"], xy[side == "right"], xy[side == "center"]
 
 
 def _needs_reverse(pts, data, closed) -> bool:
@@ -194,7 +199,10 @@ def _curvature_xy(x, y, ds, closed):
 
 
 # ---------------------------------------------------------------------------
-def track_from_dict(data: dict, ds: float = 0.5, smooth_m: float = 4.0, name: str = "track") -> Track:
+def track_from_dict(data: dict, ds: float = 0.5, smooth_m: float = 4.0, name: str = "track",
+                    kappa_smooth_m: float | None = None) -> Track:
+    """``smooth_m``: moving-average window for the path points and, unless ``kappa_smooth_m``
+    is given, for the curvature as well."""
     name = data.get("name", name)
     keys = set(data)
     pairs = [("left", "right"), ("blue", "yellow"), ("inner", "outer")]
@@ -228,7 +236,7 @@ def track_from_dict(data: dict, ds: float = 0.5, smooth_m: float = 4.0, name: st
         pts = _points(data["centerline"])
         widths = _point_widths(data["centerline"])
     elif "cones" in keys:                                               # raw surveyed cones
-        cones = _side_cones(data)
+        cones = _side_cones(data)[:2]
         pts = _cones_to_centerline(*cones)
     else:
         for l, r in pairs:
@@ -253,8 +261,9 @@ def track_from_dict(data: dict, ds: float = 0.5, smooth_m: float = 4.0, name: st
     x, y = res[0], res[1]
     ds = s[1] - s[0]
     win = max(int(round(smooth_m / ds)), 1) | 1          # odd window
+    kwin = win if kappa_smooth_m is None else max(int(round(kappa_smooth_m / ds)), 1) | 1
     x, y = smooth(x, win, closed), smooth(y, win, closed)
-    kappa = smooth(_curvature_xy(x, y, ds, closed), win, closed)
+    kappa = smooth(_curvature_xy(x, y, ds, closed), kwin, closed)
     kappa = np.clip(kappa, -1 / MIN_RADIUS, 1 / MIN_RADIUS)
     if widths is not None:
         wl, wr = res[2], res[3]
@@ -264,7 +273,18 @@ def track_from_dict(data: dict, ds: float = 0.5, smooth_m: float = 4.0, name: st
         wl = wr = np.full(len(s), float(data["width"]) / 2)
     else:
         wl = wr = None
-    return Track(name, s, kappa, x, y, closed, wl, wr)
+    return Track(name, s, kappa, x, y, closed, wl, wr, _slalom_cones(data))
+
+
+def _slalom_cones(data):
+    """Slalom cones: cone2track ``"cones"`` with side "center", or ``"slalom": [[x, y], ...]``."""
+    if "slalom" in data:
+        pts = _points(data["slalom"])
+    elif isinstance(data.get("cones"), list) and data["cones"] and isinstance(data["cones"][0], dict):
+        pts = _side_cones(data)[2]
+    else:
+        return None
+    return pts if len(pts) else None
 
 
 def load_track(path, ds: float = 0.5, smooth_m: float = 4.0) -> Track:

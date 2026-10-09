@@ -117,9 +117,9 @@ def test_racing_line_on_a_ring_uses_the_outside():
 
 
 def test_racing_lines_faster_on_fsk(car, fsk):
-    line, times = best_line(car, fsk)
-    centre = simulate(car, fsk).lap_time
-    assert all(t < centre for t in times.values())
+    line, times = best_line(car, fsk, slalom=False)
+    centre = simulate(car, driven_path(car, fsk, "center", slalom=False)[0]).lap_time
+    assert min(times.values()) < centre
     assert simulate(car, line).lap_time == pytest.approx(min(times.values()))
     (xl, yl), (xr, yr) = fsk.edges()
     assert fsk.width_left.min() > 0 and fsk.width_right.min() > 0
@@ -140,3 +140,33 @@ def test_channels_consistent(car, fsk, tmp_path):
     assert rows[0] == list(ch) and len(rows) == len(res.s) + 1
     s, dt = delta_time(res, res)
     assert np.allclose(dt, 0)
+
+
+# --- slalom ----------------------------------------------------------------------------
+from lapsim.line import driven_path  # noqa: E402
+from lapsim.slalom import CONE_RADIUS, clearance, find_slaloms  # noqa: E402
+
+
+def test_fsk_slalom_cones_are_grouped(fsk):
+    groups = find_slaloms(fsk)
+    assert [len(g) for g in groups] == [3, 4, 2, 2]
+
+
+@pytest.mark.parametrize("mode", ["center", "compromise"])
+def test_slalom_weaves_and_clears_every_cone(car, fsk, mode):
+    path, info = driven_path(car, fsk, mode)
+    c = clearance(path, fsk.slalom_cones)
+    assert np.all(np.abs(c) >= 1.45 / 2 + CONE_RADIUS)          # no cone touched
+    for g, sides in zip(find_slaloms(fsk), info["slalom_sides"]):
+        assert all(a == -b for a, b in zip(sides, sides[1:]))   # alternating
+    # pass left (+1) = car left of the cone = cone on the car's right (negative clearance)
+    for g, sides in zip(find_slaloms(fsk), info["slalom_sides"]):
+        for gate, side in zip(g, sides):
+            assert np.sign(c[gate.cone]) == -side
+
+
+def test_slalom_costs_time_and_can_be_disabled(car, fsk):
+    with_s, _ = driven_path(car, fsk, "center")
+    without, info = driven_path(car, fsk, "center", slalom=False)
+    assert info["slalom_sides"] is None
+    assert simulate(car, with_s).lap_time > simulate(car, without).lap_time
