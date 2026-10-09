@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fsk-lapsim"
+version = "0.1.0"
+description = "Quasi-steady-state lap time simulator and aero sensitivity tool for Formula Student Korea EVs"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "SeoulTech e_formula aero" }]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=2.0",
+    "matplotlib>=3.7",
+    "pyyaml>=6.0",
+    "pydantic>=2.5",
+    "typer>=0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "pytest-cov>=4", "hypothesis>=6", "ruff>=0.4"]
+
+[project.scripts]
+fsk-lapsim = "fsk_lapsim.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+fsk_lapsim = ["py.typed", "configs/*.yaml", "configs/tracks/*.yaml", "data/*.csv", "data/tracks/*.csv", "data/gps/*.nmea"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["slow: long-running test (Monte Carlo, sweeps)"]
+
+[tool.coverage.run]
+source = ["fsk_lapsim"]
+branch = false
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF", "D"]
+ignore = [
+    "D105", "D107", "D203", "D213", "D413",
+    "RUF001", "RUF002", "RUF003",  # Korean text / unicode symbols in strings and comments are intentional
+    "N803", "N806",                 # physics names such as ClA, Fz, L are kept as in the literature
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D"]

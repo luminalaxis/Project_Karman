@@ -1,0 +1,8 @@
+# 이벤트 정의. 트랙 파일 경로는 이 파일 기준 상대경로 또는 패키지 내장 경로.
+acceleration_length_m: {value: 75.0, unit: m, note: "FS 가속 종목 75 m 정지 출발"}
+skidpad_radius_m: {value: 9.125, unit: m, assumed: true, note: "주행선 반경 (내원 지름 15.25 m + 차선 폭 3 m 의 중앙), FSK 규정 확인 필요"}
+autocross_track: tracks/autocross_generated.yaml
+autocross_start: standing
+endurance_track: tracks/endurance_generated.yaml
+endurance_total_distance_m: {value: 22000.0, unit: m, assumed: true, note: "FS 일반 엔듀런스 총 거리, FSK 규정 확인 필요"}
+ds_m: {value: 0.25, unit: m, note: "솔버 거리 격자"}
