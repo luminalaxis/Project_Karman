@@ -6,7 +6,9 @@
 ```bash
 pip install -r requirements.txt          # numpy (필수), matplotlib (플롯), pytest
 
-python -m lapsim run    --plot lap.png                        # 기본: tracks/fsk_2026_endurance.json
+python -m lapsim gui                                          # GUI (브라우저에서 열림, streamlit)
+python -m lapsim run    --plot lap.png --export lap.csv       # 기본: tracks/fsk_2026_endurance.json
+python -m lapsim run    --line best                           # 주행 라인 (최소곡률 / 절충 중 빠른 것)
 python -m lapsim delta  --dcl 10 --dcd 5                      # 전체 공력 ClA +10 %, CdA +5 %
 python -m lapsim delta  --dev rear:cl=10,cd=5 --dev front:cl=5   # 장치별 변경 (조합 가능)
 python -m lapsim delta  --dev rear:cl=10 --bal 48             # 변경 후 밸런스 48 % F 로 재트림
@@ -19,7 +21,21 @@ python -m lapsim run --set aero.rear.ClA=1.6 --set mass=270   # 파라미터 즉
 python -m lapsim run --track tracks/sample_autocross.json     # 합성 오토크로스 (정지 출발)
 ```
 공통 옵션: `--car` (차량 JSON), `--track` (트랙 JSON), `--ds` (격자 간격, 기본 0.5 m),
-`--smooth` (센터라인 스무딩 창, 기본 4 m), `--flying` (열린 코스를 플라잉 스타트로).
+`--smooth` (센터라인 스무딩 창, 기본 4 m), `--flying` (열린 코스를 플라잉 스타트로),
+`--line center|compromise|mincurv|best` (주행 경로), `--car-width`, `--line-margin`, `--track-width`,
+`--plot PNG` (리포트 그래프), `--export CSV` (전체 채널 데이터).
+
+## GUI (`python -m lapsim gui`)
+Streamlit 웹 앱. 사이드바에서 차량/트랙 파일 선택·업로드, 주행 경로 선택.
+| 탭 | 내용 |
+|---|---|
+| 🚗 차량 설정 | 질량·타이어·파워트레인·서스펜션 입력, 공력 장치 표 편집(행 추가/삭제), 편집한 차량 JSON 저장 |
+| ⏱ 랩 결과 | 랩타임·에너지 등 요약, 속도/가속도/g-g/휠 하중/차고/실시간 공력 밸런스/축 이용률/배터리 출력/장치별 공력 그래프, 트랙 맵(채널 색상 선택), 채널 표 + CSV 다운로드 |
+| Δ 비교 | 장치별·전체 ΔClA/ΔCdA, 밸런스 재트림 → 랩타임 차, 속도 겹침, 누적 시간차 그래프 |
+| 📈 공력 계수 | 1 % ClA/CdA 당 ms, 교환비, 장치별 0.1 ClA/CdA 당 ms 와 넘어야 할 L/D |
+| 🎯 목표치 | 밸런스 창·대상 장치 선택 → 장치별 목표 ClA/CdA, 하중표, 목표 차량 JSON 저장 |
+| 🗺 스윕 | ClA×CdA 랩타임 등고선, 공력 밸런스 스윕 |
+| 📋 하중표 | 장치별 속도별 다운포스/드래그 [N], 랩 평균·최대, 드래그 에너지 |
 음수로 시작하는 범위는 `--cl=-20:20:5` 처럼 `=` 를 붙인다.
 
 ## 공력 장치 (front / mid / rear)
@@ -94,25 +110,36 @@ per device (absolute change on that device only; balance shifts with it):
 ## 모델
 | 항목 | 내용 |
 |---|---|
-| 공력 | 장치별 F_down = ½ρ·ClA_i·v², F_drag = ½ρ·CdA_i·v², 앞축 몫 = 1 − x_cp,i/L, 장치별 드래그 피칭 모멘트(h_cp,i) 합산 |
-| 축하중 | 정적 배분 + 공력 + 종방향 하중이동(m·a_x·h/L) — 앞/뒤 축 분리 |
-| 타이어 | 하중 민감 μ(Fz) = μ0·(1 − k·(Fz−Fz0)/Fz0), 축별 마찰 타원 (μx, μy) |
-| 코너 한계속도 | 앞축 횡력 m·v²·κ·b/L, 뒤축 횡력 m·v²·κ·a/L + 주행저항 구동력이 각 축 한계 이내인 최대 v (이분법). 어느 축이 먼저 포화되는지 기록 → 공력 밸런스 효과가 드러남 |
-| 가속 | min(모터 토크 한계, 80 kW 출력 한계, 후륜 잔여 그립) − 드래그 − 구름저항, 모터 최고 rpm에서 차단 |
-| 제동 | 4륜, 축별 잔여 그립 (이상적 브레이크 배분) + 드래그 |
-| 랩 | v = min(전진 패스, 후진 패스), 닫힌 코스는 플라잉 랩(3랩 타일링 후 가운데 랩), 열린 코스는 정지 출발 |
+| 공력 | 장치별 F_down = ½ρ·ClA_i·f_cl(Δh_f, Δh_r)·v², F_drag 동일, 앞축 몫 = 1 − x_cp,i/L, 장치별 드래그 피칭 모멘트(h_cp,i) 합산. f = 차고 다항식 맵 |
+| 차고 | h = h_0 − ΔFz_axle / 히브 강성, 범프스톱 하한. 공력 ↔ 차고 고정점 반복 |
+| 축하중 | 정적 배분 + 공력 + 종방향 하중이동(m·a_x·h/L + 드래그 모멘트) — 앞/뒤 축 분리 |
+| 좌우 하중이동 | 바퀴당 ΔFz = LLTD_axle·m·a_y·h / 트레드_axle, LLTD = 롤 강성 배분 (안쪽 바퀴 들림까지) |
+| 타이어 | 바퀴별 하중 민감 μ(Fz) = μ0·(1 − k·(Fz−Fz0)/Fz0) → 하중이동이 많은 축이 그립을 더 잃음, 축별 마찰 타원 (μx, μy) |
+| 요 관성 | ṙ ≈ v²·dκ/ds, 앞축 횡력 = (m·a_y·b + Iz·ṙ)/L, 뒤축 = (m·a_y·a − Iz·ṙ)/L → 진입은 앞축, 탈출은 뒤축 부담 증가 |
+| 코너 한계속도 | 위 횡력이 각 축 한계 이내인 최대 v (벡터화 이분법). 어느 축이 먼저 포화되는지 기록 |
+| 가속 | min(모터 토크, 80 kW, 후륜 잔여 그립) − 드래그 − 구름저항, 하중이 빠지는 앞축 횡그립 한계로 제한 |
+| 제동 | 4륜, 축별 잔여 그립 (이상적 배분) + 드래그, 하중이 빠지는 뒤축 횡그립 한계로 제한. a_x ↔ 하중이동은 할선법으로 수렴 |
+| 랩 | v = min(전진, 후진). 닫힌 코스는 가장 느린 정점에서 시작하는 플라잉 랩, 열린 코스는 정지 출발 |
+| 주행 라인 | `mincurv`: 정확한 3점 곡률의 ∫κ² ds 최소화 (가우스-뉴턴 + 박스 QP), `compromise`: 기준 격자 2차 차분 최소화 (곡률과 경로 길이 절충), `best`: 둘 다 돌려 빠른 것 |
 
-단순화 (QSS 특성상): 좌우 하중이동·롤 강성 배분 없음, 요 관성/과도 응답 없음, 센터라인 주행(레이싱라인 최적화 없음),
-라이드 하이트에 따른 공력 맵 없음, 공력 밸런스 최적점은 "두 축 동시 포화"점이라 실제 차는 안정성 마진만큼 뒤로 둔다.
+남은 단순화 (QSS 특성상): 댐퍼·서스펜션 과도 응답 없음 (하중이동은 정상상태), 요 관성은 곡률 변화율 기반 준정적 근사,
+주행 라인은 최소 시간 최적해가 아님 (최소 곡률/절충), 타이어는 마찰 타원 (슬립·온도 모델 없음), 배터리 전압 강하·열 디레이팅 없음.
+공력 밸런스 최적점은 "두 축 동시 포화"점이라 실제 차는 안정성 마진만큼 뒤로 둔다.
+센터라인 스무딩(`--smooth`)이 크면 헤어핀이 펴져 랩타임이 크게 빨라지므로(FSK: 4 m 56.9 s, 8 m 53.6 s) 주행 라인 옵션으로 비교할 것.
 
 ## 파일
 ```
 lapsim/vehicle.py   차량·타이어·공력 장치(AeroDevice)·EV 파워트레인 (Vehicle, load_vehicle)
 lapsim/track.py     트랙 JSON 로더 → 등간격 곡률 프로파일
+lapsim/physics.py   공통 물리 코어 (공력·차고·축하중·바퀴별 그립·요 관성)
 lapsim/solver.py    QSS 솔버 (simulate → LapResult)
+lapsim/line.py      주행 라인 (mincurv / compromise / best)
+lapsim/channels.py  랩 채널 계산, CSV 내보내기, 누적 시간차
+lapsim/figures.py   GUI 용 plotly 그래프
+app.py              Streamlit GUI
 lapsim/study.py     modify / delta / sweep / balance_sweep / coefficients / device_coefficients
 lapsim/targets.py   장치별 하중표(device_loads) / 목표치 최적화(optimise_targets)
-lapsim/plot.py      속도 트레이스, 스윕 히트맵, 밸런스 곡선 (matplotlib)
+lapsim/plot.py      CLI 리포트 그래프 (속도, 시간차, 가속도, g-g, 맵, 차고, 이용률), 스윕, 밸런스 (matplotlib)
 cars/fsk_ev_baseline.json   기본 FS EV (280 kg, front/mid/rear/body, ClA 3.65, CdA 1.32, 47 % F, 80 kW)
 tracks/fsk_2026_endurance.json  FSK 2026 엔듀런스 (cone2track export, 850.8 m, 시계방향)
 tracks/sample_autocross.json  테스트용 합성 오토크로스 (실제 FSK 코스 아님)
@@ -133,7 +160,19 @@ tracks/sample_autocross.json  테스트용 합성 오토크로스 (실제 FSK �
 주행 방향: `meta.run` / `direction` (`clockwise`·`counterclockwise`) 또는 `reverse: true` 로 점 순서를 맞춘다 (x 동쪽, y 북쪽).
 
 ## 차량 JSON
-`cars/fsk_ev_baseline.json` 참고. 단위는 SI (kg, m, N, W, rpm). `ClA` 는 다운포스 양수.
+`cars/fsk_ev_baseline.json` 참고. 단위는 SI (kg, m, N, W, rpm), 차고만 mm. `ClA` 는 다운포스 양수.
+```jsonc
+"yaw_inertia": 100.0,                       // Iz [kg m²], 0 = 요 관성 무시
+"suspension": {                             // 없으면 좌우 하중이동 없음, 차고 고정
+  "track_front": 1.22, "track_rear": 1.18,  // 트레드 [m]
+  "roll_stiffness_front": 450.0, "roll_stiffness_rear": 400.0,   // [Nm/deg] → LLTD (또는 "lltd_front": 0.53)
+  "ride_height_front": 30.0, "ride_height_rear": 35.0,           // 정적 차고 [mm]
+  "heave_rate_front": 120.0, "heave_rate_rear": 140.0,           // 축 히브 강성 [N/mm], 0 = 차고 고정
+  "min_ride_height": 8.0                                         // 범프스톱 [mm]
+}
+// 장치별 차고 맵: f = 1 + c0·Δh_f + c1·Δh_r + c2·Δh_f² + c3·Δh_r² + c4·Δh_f·Δh_r  (Δh [mm], 정적 차고 기준)
+"mid": {..., "rh_cl": [-0.008, -0.004, -0.0002], "rh_cd": [-0.004, -0.002]}
+```
 
 ## 테스트
 ```bash

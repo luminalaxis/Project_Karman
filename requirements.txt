@@ -1,3 +1,6 @@
 numpy>=1.24
-matplotlib>=3.7   # optional, for --plot
+matplotlib>=3.7   # CLI --plot
+streamlit>=1.50   # GUI (python -m lapsim gui)
+plotly>=5.18      # GUI charts
+pandas>=2.0       # GUI tables
 pytest>=7         # tests

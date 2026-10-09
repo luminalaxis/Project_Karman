@@ -276,7 +276,10 @@ class Vehicle:
 
 
 def load_vehicle(path) -> Vehicle:
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    return vehicle_from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+def vehicle_from_dict(data: dict) -> Vehicle:
     build = {"tyre": lambda d: Tyre(**d), "aero": Aero.from_dict,
              "powertrain": lambda d: Powertrain(**d),
              "suspension": lambda d: None if d is None else Suspension(**d)}
@@ -284,12 +287,18 @@ def load_vehicle(path) -> Vehicle:
     return Vehicle(**kwargs)
 
 
-def save_vehicle(veh: Vehicle, path) -> None:
+def vehicle_to_dict(veh: Vehicle) -> dict:
     d = veh.to_dict()
     d["aero"].pop("wheelbase", None)
     if d.get("suspension") is None:
         d.pop("suspension", None)
-    for dev in d["aero"]["devices"].values():
-        for k in [k for k, v in dev.items() if v is None]:
-            del dev[k]
-    Path(path).write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    else:
+        d["suspension"] = {k: v for k, v in d["suspension"].items() if v is not None}
+    for name, dev in d["aero"]["devices"].items():
+        d["aero"]["devices"][name] = {k: v for k, v in dev.items() if v is not None}
+    return d
+
+
+def save_vehicle(veh: Vehicle, path) -> None:
+    Path(path).write_text(json.dumps(vehicle_to_dict(veh), indent=2, ensure_ascii=False) + "\n",
+                          encoding="utf-8")

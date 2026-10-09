@@ -1,5 +1,6 @@
 """Command line interface.
 
+    python -m lapsim gui                                           # Streamlit GUI
     python -m lapsim run      --track tracks/sample_autocross.json
     python -m lapsim run      --line mincurv --plot lap.png --export lap.csv
     python -m lapsim delta    --dcl 10 --dcd 5                     # every aero device
@@ -67,6 +68,11 @@ def _describe(changes, bal):
 
 
 def main(argv=None):
+    import sys
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["gui"]:
+        import subprocess
+        return subprocess.call([sys.executable, "-m", "streamlit", "run", str(ROOT / "app.py"), *argv[1:]])
     ap = argparse.ArgumentParser(prog="lapsim", description="QSS lap time simulator (FSK aero studies)")
     ap.add_argument("command", choices=["run", "delta", "coeffs", "sweep", "balance",
                                                    "forces", "targets"])
