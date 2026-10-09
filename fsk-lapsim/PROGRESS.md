@@ -24,7 +24,12 @@ ruff check src tests
 | P7 | 분석 (sensitivity, sweep, balance-opt) | 완료 |
 | P8 | 능동 공력 (DRS) | 완료 |
 | P9 | 리포트, CLI, README, MODEL.md | 완료 |
-| P10 | 깨끗한 venv 재현 + FINAL_SUMMARY | 다음 |
+| P10 | 깨끗한 venv 재현 + FINAL_SUMMARY | 완료 |
+| E1 | 몬테카를로 불확실성 | 다음 |
+| E2 | GPS (NMEA) 임포트·실측 비교 | 대기 |
+| E3 | 모터·인버터 발열 | 대기 |
+| E4 | 점수 환산 | 대기 |
+| E5 | 성능 최적화 | 대기 |
 
 ## 완료 내용
 ### P0
@@ -110,8 +115,13 @@ ruff check src tests
 - `cli.py` (typer): run / sensitivity / sweep / compare / balance-opt / active-aero / report / assumptions / init-configs /
   track / wing2d3d, `python -m fsk_lapsim`.
 - README.md (설치·사용법·입력 형식·결과 읽는 법·한계), MODEL.md (수식·검증표).
-- 테스트 151 개 통과, 커버리지 98 %, ruff 경고 없음.
+- 테스트 137 개 통과, 커버리지 98 %, ruff 경고 없음.
+
+### P10
+- 새 venv (`python -m venv`) 에 `pip install .[dev]` (비편집 설치) → 다른 디렉터리에서 `fsk-lapsim run`, `fsk-lapsim report`
+  (51 s, 1.5 MB), `init-configs` 로 복사한 설정으로 `compare` → 설치본으로 전체 테스트 137 개 통과, 커버리지 98 %.
+- FINAL_SUMMARY.md 작성 (확장 결과는 이후 추가).
 
 ## 다음 할 일
-- P10: 새 venv 에 `pip install .` → `fsk-lapsim run` → `fsk-lapsim report` 재현, FINAL_SUMMARY.md, zip.
-- 그다음 E1 (몬테카를로) → E2 (GPS NMEA) → E3 (발열) → E4 (점수) → E5 (성능).
+- E1 (몬테카를로: 가정 범위 → 랩타임 분포, 리어윙 후보 순위 역전 확률) → E2 (GPS NMEA) → E3 (발열) → E4 (점수) → E5 (성능).
+- 모두 끝나면 FINAL_SUMMARY 갱신, zip 생성 (`fsk-lapsim/` 만, .venv/out 제외), 사용자에게 전달.
