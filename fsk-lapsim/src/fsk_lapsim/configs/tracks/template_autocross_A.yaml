@@ -1,0 +1,29 @@
+# 손으로 설계한 오토크로스 템플릿 A (열린 코스, 약 0.8 km). 규정 범위 안의 전형적 요소 조합.
+name: template_autocross_A
+type: segments
+closed: false
+segments:
+  - {type: straight, length_m: 40}
+  - {type: slalom, n_cones: 6, spacing_m: 10, weave_m: 2.0, direction: left}
+  - {type: straight, length_m: 25}
+  - {type: arc, radius_m: 5.5, angle_deg: 180, direction: right}
+  - {type: straight, length_m: 60}
+  - {type: arc, radius_m: 15, angle_deg: 90, direction: left}
+  - {type: straight, length_m: 30}
+  - {type: arc, radius_m: 9, angle_deg: 40, direction: right}
+  - {type: straight, length_m: 5}
+  - {type: arc, radius_m: 9, angle_deg: 40, direction: left}
+  - {type: straight, length_m: 45}
+  - {type: arc, radius_m: 20, angle_deg: 120, direction: left}
+  - {type: straight, length_m: 75}
+  - {type: arc, radius_m: 5.0, angle_deg: 180, direction: left}
+  - {type: straight, length_m: 35}
+  - {type: arc, radius_m: 22, angle_deg: 60, direction: right}
+  - {type: arc, radius_m: 10, angle_deg: 70, direction: right}
+  - {type: straight, length_m: 30}
+  - {type: arc, radius_m: 12, angle_deg: 90, direction: right}
+  - {type: straight, length_m: 20}
+  - {type: slalom, n_cones: 5, spacing_m: 9, weave_m: 2.0, direction: left}
+  - {type: straight, length_m: 20}
+  - {type: arc, radius_m: 9, angle_deg: 90, direction: left}
+  - {type: straight, length_m: 40}

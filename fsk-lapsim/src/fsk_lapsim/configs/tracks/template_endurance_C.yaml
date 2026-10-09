@@ -1,0 +1,27 @@
+# 손으로 설계한 테크니컬 루프 C (시계방향, 헤어핀·슬라럼 많은 저속 코스).
+# 총 회전 −360°, 직선 0·15 번 길이를 풀어서 정확히 폐합.
+name: template_endurance_C
+type: segments
+closure: adjust_straights
+adjust: [0, 15]
+max_straight_m: 80
+segments:
+  - {type: straight, length_m: 45}                                        # 0 출발 직선 (E) (폐합 조정)
+  - {type: arc, radius_m: 6, angle_deg: 90, direction: right}             # 1 → S
+  - {type: straight, length_m: 70}                                        # 2
+  - {type: arc, radius_m: 6, angle_deg: 90, direction: right}             # 3 → W
+  - {type: slalom, n_cones: 6, spacing_m: 8, weave_m: 2.0, direction: left}   # 4
+  - {type: straight, length_m: 15}                                        # 5
+  - {type: arc, radius_m: 5, angle_deg: 180, direction: left}             # 6 헤어핀 → E
+  - {type: straight, length_m: 55}                                        # 7
+  - {type: arc, radius_m: 6, angle_deg: 180, direction: right}            # 8 헤어핀 → W
+  - {type: straight, length_m: 45}                                        # 9
+  - {type: arc, radius_m: 9, angle_deg: 45, direction: left}              # 10 시케인
+  - {type: straight, length_m: 5}                                         # 11
+  - {type: arc, radius_m: 9, angle_deg: 45, direction: right}             # 12
+  - {type: straight, length_m: 10}                                        # 13
+  - {type: arc, radius_m: 7, angle_deg: 90, direction: right}             # 14 → N
+  - {type: straight, length_m: 30}                                        # 15 (폐합 조정)
+  - {type: slalom, n_cones: 4, spacing_m: 9, weave_m: 2.0, direction: right}  # 16
+  - {type: straight, length_m: 10}                                        # 17
+  - {type: arc, radius_m: 10, angle_deg: 90, direction: right}            # 18 → E

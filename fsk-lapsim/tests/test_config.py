@@ -72,8 +72,10 @@ def test_component_change_updates_mass_and_cg(baseline: Vehicle):
     assert same.cg_height_m == pytest.approx(baseline.cg_height_m)
     assert same.static_front_fraction == pytest.approx(baseline.static_front_fraction)
     # heavier, higher rear wing: mass up, CG up, weight moves rearwards
-    heavy = [dataclasses.replace(c, mass_kg=c.mass_kg + 2.0) if c.name == "rear_wing" else c
-             for c in comps]
+    heavy = [
+        dataclasses.replace(c, mass_kg=c.mass_kg + 2.0) if c.name == "rear_wing" else c
+        for c in comps
+    ]
     v2 = apply_component_change(baseline, comps, heavy)
     assert v2.mass_kg == pytest.approx(322.0)
     assert v2.cg_height_m == pytest.approx((320 * 0.28 + 2.0 * 0.95) / 322.0)

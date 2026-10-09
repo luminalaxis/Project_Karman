@@ -82,13 +82,20 @@ class AeroComponent:
 
     def front_cla_m2(self, wheelbase_m: float) -> float:
         """Contribution of this component to the front-axle downforce coefficient [m²]."""
-        return self.cla_m2 * (1.0 - self.x_cp_m / wheelbase_m) - self.cda_m2 * self.z_cp_m / wheelbase_m
+        lift_part = self.cla_m2 * (1.0 - self.x_cp_m / wheelbase_m)
+        return lift_part - self.cda_m2 * self.z_cp_m / wheelbase_m
 
     def scaled(self, cl_factor: float = 1.0, cd_factor: float = 1.0) -> AeroComponent:
         """Copy with ClA and CdA scaled (e.g. an opened DRS flap)."""
         return AeroComponent(
-            self.name, self.cla_m2 * cl_factor, self.cda_m2 * cd_factor, self.x_cp_m,
-            self.z_cp_m, self.mass_kg, self.x_mass_m, self.z_mass_m,
+            self.name,
+            self.cla_m2 * cl_factor,
+            self.cda_m2 * cd_factor,
+            self.x_cp_m,
+            self.z_cp_m,
+            self.mass_kg,
+            self.x_mass_m,
+            self.z_mass_m,
         )
 
 
@@ -100,10 +107,7 @@ def synthesize(
     cla = sum(c.cla_m2 for c in comps)
     cda = sum(c.cda_m2 for c in comps)
     cla_f = sum(c.front_cla_m2(wheelbase_m) for c in comps)
-    if cla <= 0.0:
-        balance = 0.5
-    else:
-        balance = cla_f / cla
+    balance = 0.5 if cla <= 0.0 else cla_f / cla
     return Aero(cla_m2=cla, cda_m2=cda, balance_front=balance, air_density_kg_m3=air_density_kg_m3)
 
 
@@ -114,8 +118,13 @@ def components_from_config(cfg: AeroComponentsConfig) -> list[AeroComponent]:
         x_mass = c.x_mass_m.value if c.x_mass_m is not None else c.x_cp_m.value
         out.append(
             AeroComponent(
-                name=c.name, cla_m2=c.cla_m2.value, cda_m2=c.cda_m2.value, x_cp_m=c.x_cp_m.value,
-                z_cp_m=c.z_cp_m.value, mass_kg=c.mass_kg.value, x_mass_m=x_mass,
+                name=c.name,
+                cla_m2=c.cla_m2.value,
+                cda_m2=c.cda_m2.value,
+                x_cp_m=c.x_cp_m.value,
+                z_cp_m=c.z_cp_m.value,
+                mass_kg=c.mass_kg.value,
+                x_mass_m=x_mass,
                 z_mass_m=c.z_mass_m.value,
             )
         )
@@ -125,7 +134,7 @@ def components_from_config(cfg: AeroComponentsConfig) -> list[AeroComponent]:
 def replace_component(
     components: Sequence[AeroComponent], new: AeroComponent, name: str | None = None
 ) -> list[AeroComponent]:
-    """Return a copy of ``components`` with the one called ``name`` (default ``new.name``) swapped."""
+    """Copy of ``components`` with the one called ``name`` (default ``new.name``) swapped."""
     key = name or new.name
     if not any(c.name == key for c in components):
         raise KeyError(f"no aero component named {key!r}")

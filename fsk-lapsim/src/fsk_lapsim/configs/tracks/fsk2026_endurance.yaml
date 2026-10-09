@@ -1,0 +1,8 @@
+# 참고 트랙: 저장소의 tracks/fsk_2026_endurance.json (cone2track 내보내기) 중심선.
+# 측량 정확도 미확인. 중심선이므로 레이싱 라인보다 느리게 나온다 (주행선 = 중심선).
+name: fsk2026_endurance_centerline
+type: csv
+path: tracks/fsk2026_endurance_centerline.csv
+closed: true
+reverse: true          # 점 순서가 반시계 → 실제 주행 방향(시계방향)으로 뒤집음
+smoothing_sigma_m: 0.3 # 측량/변환 노이즈 σ 가정 [m]

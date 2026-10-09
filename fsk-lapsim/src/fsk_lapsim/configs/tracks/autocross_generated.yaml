@@ -1,0 +1,10 @@
+# 규정 기반 합성 오토크로스 (시드 고정). 실제 FSK 코스 아님.
+# 규칙 범위(LayoutRules)는 FS 일반 범위의 가정값 — FSK 규정으로 교체 필요.
+name: autocross_generated_seed42
+type: generated
+generator:
+  kind: autocross
+  seed: 42
+  target_length_m: 900
+  # rules: {max_straight_m: 80, turn_radius_m: [7, 25], hairpin_radius_m: [4.5, 7],
+  #         slalom_spacing_m: [7.5, 12], slalom_cones: [4, 7], slalom_weave_m: 2.0, min_gap_m: 8}

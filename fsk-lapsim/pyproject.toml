@@ -53,7 +53,7 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF", "D"]
 ignore = [
-    "D105", "D107", "D203", "D213", "D413",
+    "D105", "D107", "D203", "D213", "D401", "D413",
     "RUF001", "RUF002", "RUF003",  # Korean text / unicode symbols in strings and comments are intentional
     "N803", "N806",                 # physics names such as ClA, Fz, L are kept as in the literature
 ]
