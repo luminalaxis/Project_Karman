@@ -23,7 +23,8 @@ ruff check src tests
 | P6 | 이벤트 4종 | 완료 |
 | P7 | 분석 (sensitivity, sweep, balance-opt) | 완료 |
 | P8 | 능동 공력 (DRS) | 완료 |
-| P9 | 리포트, CLI, README, MODEL.md | 다음 |
+| P9 | 리포트, CLI, README, MODEL.md | 완료 |
+| P10 | 깨끗한 venv 재현 + FINAL_SUMMARY | 다음 |
 
 ## 완료 내용
 ### P0
@@ -100,6 +101,17 @@ ruff check src tests
   에너지 −0.045 kWh. 닫힘 명령은 제동 시작 약 7–8 m (0.25 s) 전. 저속 개방 시 오히려 손해 (−0.08 s/랩).
   → 1 kg 이 오토크로스 0.031 s 이므로 DRS 이득은 액추에이터 질량 ~1 kg 과 비슷한 수준 (회전수 제한 140 km/h, 짧은 직선).
 
+### P9
+- `plots.py`: 속도 트레이스(속도·ax·ay), 속도 색 트랙 맵, GGV, 민감도 막대(빨강 = 느려짐/파랑 = 빨라짐), ClA–CdA 등고선 2 장,
+  모터 운전점 히스토그램 + 한계선, 후보 Δ 막대(이벤트별 작은 패널), 밸런스 스캔, DRS 트레이스, 히스토그램, GPS 비교.
+  라벨은 영어, 색은 고정 순서 범주형 / 단색 순차형 / 파랑↔빨강 발산형.
+- `report.py`: 단일 HTML (이미지 base64 내장, 한국어 본문, 라이트/다크 토큰), 13 절 (요약 → 가정 목록 → 모델 한계),
+  DUMMY 경고 박스, 확장 섹션 훅 `EXTRA_SECTIONS`. quick 모드 약 35 s, 기본 약 70 s.
+- `cli.py` (typer): run / sensitivity / sweep / compare / balance-opt / active-aero / report / assumptions / init-configs /
+  track / wing2d3d, `python -m fsk_lapsim`.
+- README.md (설치·사용법·입력 형식·결과 읽는 법·한계), MODEL.md (수식·검증표).
+- 테스트 151 개 통과, 커버리지 98 %, ruff 경고 없음.
+
 ## 다음 할 일
-- P9: plots.py (속도 트레이스, 트랙 맵, GGV, 민감도 막대, ClA–CdA 등고선, 모터 운전점), report.py (단일 HTML, 한국어),
-  cli.py (typer: run / sensitivity / sweep / compare / balance-opt / active-aero / report / assumptions / init-configs), README, MODEL.md.
+- P10: 새 venv 에 `pip install .` → `fsk-lapsim run` → `fsk-lapsim report` 재현, FINAL_SUMMARY.md, zip.
+- 그다음 E1 (몬테카를로) → E2 (GPS NMEA) → E3 (발열) → E4 (점수) → E5 (성능).

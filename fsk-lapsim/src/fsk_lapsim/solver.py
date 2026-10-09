@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import numpy as np
+import pandas as pd
 from numpy.typing import NDArray
 
 from .energy import EnergyBreakdown, lap_energy
@@ -109,6 +110,35 @@ class LapResult:
     def mean_speed_mps(self) -> float:
         """Average speed [m/s]."""
         return self.length_m / self.lap_time_s
+
+    def to_frame(self) -> pd.DataFrame:
+        """Node channels as a table (segment quantities assigned to their start node)."""
+        e = self.energy
+
+        def seg(a: FloatArray) -> FloatArray:
+            return np.append(a, np.nan)
+
+        return pd.DataFrame(
+            {
+                "s_m": self.s,
+                "t_s": self.t,
+                "v_kph": self.v * 3.6,
+                "v_lim_kph": self.v_lim * 3.6,
+                "ax_g": self.ax / 9.81,
+                "ay_g": self.ay / 9.81,
+                "kappa_1pm": self.kappa,
+                "fz_fl_n": self.wheel_loads[0],
+                "fz_fr_n": self.wheel_loads[1],
+                "fz_rl_n": self.wheel_loads[2],
+                "fz_rr_n": self.wheel_loads[3],
+                "limit": np.array(["corner", "accel", "brake"])[self.limit],
+                "fx_tyre_n": seg(e.fx_tyre_n),
+                "drag_n": seg(e.drag_n),
+                "p_battery_kw": seg(e.p_battery_w / 1e3),
+                "motor_rpm": seg(e.motor_rpm),
+                "motor_torque_nm": seg(e.motor_torque_nm),
+            }
+        )
 
     def summary(self) -> dict[str, float]:
         """Scalar key figures."""
