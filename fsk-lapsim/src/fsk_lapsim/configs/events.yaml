@@ -5,4 +5,5 @@ autocross_track: tracks/autocross_generated.yaml
 autocross_start: standing
 endurance_track: tracks/endurance_generated.yaml
 endurance_total_distance_m: {value: 22000.0, unit: m, assumed: true, note: "FS 일반 엔듀런스 총 거리, FSK 규정 확인 필요"}
+# endurance_max_power_w: {value: 40000.0, unit: W, assumed: true, note: "엔듀런스 에너지 관리용 출력 제한 (선택)"}
 ds_m: {value: 0.25, unit: m, note: "솔버 거리 격자"}

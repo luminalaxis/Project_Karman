@@ -158,6 +158,7 @@ class EventsConfig(_Section):
     autocross_start: Literal["standing", "flying"] = "standing"
     endurance_track: str
     endurance_total_distance_m: Param
+    endurance_max_power_w: Param | None = None
     ds_m: Param = Field(default_factory=lambda: Param(value=0.25))
 
 
