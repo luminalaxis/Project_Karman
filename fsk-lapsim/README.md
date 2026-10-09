@@ -128,6 +128,14 @@ NEO-6M 등 NMEA 0183 (RMC/GGA/VTG, 토커 GP/GN/GL) → 랩 분할 (첫 고정�
 (랩타임 비, 속도 RMSE, 평균 차이). **수신기는 5–10 Hz 로 설정**할 것 (1 Hz 기본값은 헤어핀을 놓쳐 시뮬레이션이 7–14 % 빨라짐).
 만든 트랙 CSV 는 트랙 YAML `type: csv` 로 다시 쓸 수 있다 (`smoothing_sigma_m` 작게).
 
+### E3 발열 (`fsk-lapsim thermal`)
+```bash
+fsk-lapsim thermal --plot heat.png --map-plot motor_eff.png      # 계수: configs/thermal.yaml (가정값)
+```
+엔듀런스 운전점에서 모터 (k_cu·T² + k_fe·ω^1.5 + k_w·ω²), 인버터 (P0 + a·I + b·I², I = |T|/k_t), 팩 (I²R) 손실을 계산하고,
+부품별 열용량·열저항 집중 모델로 온도를 적분한다. 출력: 총 발열 [kJ], 평균/최대 발열률 [kW], 종료·최고 온도, 정상상태 온도,
+한계 온도를 지키는 데 필요한 열저항 (`required_r_k_per_w` < `assumed_r_k_per_w` 이면 냉각 강화 필요), 모터 효율 맵.
+
 ## 결과 읽는 법
 - **민감도 표**: "표시 단위만큼 늘렸을 때 몇 초" (양수 = 느려짐). 엔듀런스는 총 시간.
 - **등가 환산**: "+1 kg 과 같은 오토크로스 시간 손실을 내는 ClA/CdA 변화" — 무게와 공력의 교환 비율.

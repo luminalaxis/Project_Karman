@@ -469,6 +469,38 @@ def gps(
 
 
 @app.command()
+def thermal(
+    vehicle: VehicleOpt = None,
+    events: EventsOpt = None,
+    model: ModelOpt = "axle",
+    config: Annotated[str | None, typer.Option("--thermal", help="thermal.yaml")] = None,
+    plot: PlotOpt = None,
+    map_plot: Annotated[Path | None, typer.Option(help="motor efficiency map PNG")] = None,
+) -> None:
+    """Endurance heat of motor, inverter and accumulator (lumped thermal model, E3)."""
+    from .events import run_endurance
+    from .thermal import LossModel, endurance_heat
+
+    veh, setup, opt = _ctx(vehicle, events, model, None)
+    endu = run_endurance(
+        veh, setup.endurance_track, setup.endurance_distance_m, opt, setup.endurance_max_power_w
+    )
+    lm = LossModel.load(config)
+    h = endurance_heat(endu, lm)
+    typer.echo("ASSUMED loss/thermal parameters (thermal.yaml)")
+    typer.echo(h.table.round(3).to_string(index=False))
+    typer.echo(
+        f"implied motor+inverter efficiency while driving: "
+        f"{h.implied_motor_inverter_efficiency:.3f} (lap model uses "
+        f"{veh.powertrain.efficiency:.2f} battery→wheel)"
+    )
+    if plot:
+        _save_fig(plots.thermal_trace(h), plot)
+    if map_plot:
+        _save_fig(plots.motor_efficiency_map(lm, endu.flying_lap, veh), map_plot)
+
+
+@app.command()
 def assumptions(
     vehicle: VehicleOpt = None,
     events: EventsOpt = None,

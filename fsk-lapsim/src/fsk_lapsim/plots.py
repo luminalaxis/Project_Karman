@@ -17,6 +17,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from matplotlib.collections import LineCollection
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
@@ -407,8 +408,6 @@ def measured_vs_sim(
 
 def rank_probability(stats: object, metric: str) -> Figure:
     """P(fastest) and P(same rank as nominal) per candidate (Monte Carlo)."""
-    import pandas as pd
-
     df: pd.DataFrame = stats  # type: ignore[assignment]
     fig, axs = plt.subplots(1, 2, figsize=(10, 0.35 * len(df) + 1.6), sharey=True)
     labels = [f"{r.variant} (#{r.nominal_rank})" for r in df.itertuples()]
@@ -425,4 +424,73 @@ def rank_probability(stats: object, metric: str) -> Figure:
     axs[0].invert_yaxis()
     fig.suptitle(f"Monte Carlo ranking robustness — {metric}", x=0.01, ha="left", fontsize=10)
     fig.tight_layout()
+    return fig
+
+
+def thermal_trace(heat: object) -> Figure:
+    """Lumped component temperatures over the endurance, with limits."""
+    from .thermal import HeatResult
+
+    h: HeatResult = heat  # type: ignore[assignment]
+    fig, (a1, a2) = plt.subplots(
+        2, 1, figsize=(10, 5.2), sharex=True, gridspec_kw={"height_ratios": [1.6, 1]}
+    )
+    tmin = h.trace["t_s"] / 60.0
+    for k, name in enumerate(("motor", "inverter", "battery")):
+        c = SERIES[k]
+        a1.plot(tmin, h.trace[f"{name}_c"], color=c, label=name)
+        lim = float(h.table.set_index("component").loc[name, "limit_c"])
+        a1.axhline(lim, color=c, lw=0.9, ls="--")
+        # time-weighted 30 s mean from the cumulative heat (segments have unequal duration)
+        t_end = h.trace["t_s"].to_numpy()
+        p_w = h.trace[f"{name}_w"].to_numpy()
+        dt = np.diff(np.concatenate([[0.0], t_end]))
+        e_cum = np.concatenate([[0.0], np.cumsum(p_w * dt)])
+        t_cum = np.concatenate([[0.0], t_end])
+        win = np.minimum(30.0, t_end)
+        e_back = np.interp(t_end - win, t_cum, e_cum)
+        a2.plot(tmin, (e_cum[1:] - e_back) / np.maximum(win, 1e-9) / 1e3, color=c, lw=1.2)
+    a1.set_ylabel("temperature [°C]")
+    a1.legend(loc="upper left", ncol=3)
+    a1.set_title("Endurance heat (lumped model, dashed = limits)", loc="left")
+    a2.set_ylabel("loss [kW] (30 s mean)")
+    a2.set_xlabel("time [min]")
+    fig.tight_layout()
+    return fig
+
+
+def motor_efficiency_map(loss_model: object, lap: LapResult, vehicle: Vehicle) -> Figure:
+    """Motor efficiency contours (loss model) with the lap's operating points."""
+    from .thermal import LossModel
+
+    lm: LossModel = loss_model  # type: ignore[assignment]
+    pt = vehicle.powertrain
+    rpm = np.linspace(100, pt.motor_max_rpm, 120)
+    tq = np.linspace(2, pt.motor_max_torque_nm, 100)
+    rr, tt = np.meshgrid(rpm, tq)
+    eff = lm.motor_efficiency(tt, rr)
+    omega = rr * 2 * math.pi / 60
+    eff = np.where(tt <= np.minimum(pt.motor_max_torque_nm, pt.max_power_w / omega), eff, np.nan)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    cf = ax.contourf(
+        rr, tt, eff * 100, levels=[60, 70, 80, 85, 88, 90, 92, 93, 94, 95, 96], cmap=SEQ_BLUE
+    )
+    cb = fig.colorbar(cf, ax=ax)
+    cb.set_label("motor efficiency [%]")
+    e = lap.energy
+    drive = e.motor_torque_nm > 0
+    ax.scatter(
+        e.motor_rpm[drive],
+        e.motor_torque_nm[drive],
+        s=6,
+        color=SERIES[1],
+        alpha=0.5,
+        lw=0,
+        label="operating points (drive)",
+    )
+    ax.set_xlabel("motor speed [rpm]")
+    ax.set_ylabel("motor torque [N·m]")
+    ax.legend(loc="upper right")
+    ax.grid(False)
+    ax.set_title("Motor efficiency map (assumed loss model)", loc="left")
     return fig

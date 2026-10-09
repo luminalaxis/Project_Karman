@@ -226,3 +226,9 @@ def test_gps_low_rate_warning(tmp_path, baseline):
     p.write_text("\n".join(lines), encoding="ascii")
     out = _ok(["gps", str(p)])
     assert "WARNING" in out and "1 Hz" in out
+
+
+def test_thermal_command(tmp_path):
+    out = _ok(["thermal", "--plot", str(tmp_path / "t.png"), "--map-plot", str(tmp_path / "m.png")])
+    assert "required_r_k_per_w" in out and "implied motor+inverter efficiency" in out
+    assert (tmp_path / "t.png").exists() and (tmp_path / "m.png").exists()

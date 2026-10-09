@@ -558,6 +558,33 @@ def render_html(d: ReportData) -> str:
     )
 
 
+def _thermal_section(d: ReportData) -> str:
+    from .thermal import LossModel, endurance_heat
+
+    lm = LossModel.load()
+    h = endurance_heat(d.events.endurance, lm)  # type: ignore[arg-type]
+    body = (
+        "<p>손실 모델 (thermal.yaml, 전부 가정값): 모터 P = k_cu·T² + k_fe·ω^1.5 + k_w·ω², "
+        "인버터 P = P0 + a·I + b·I² (I = |T|/k_t), 배터리 I²R. "
+        "부품마다 열용량 C·열저항 R 집중 모델로 "
+        "엔듀런스 전체를 적분했다. required_r = 정상상태에서 한계 온도를 지키는 데 필요한 열저항 "
+        "(assumed_r 보다 작으면 냉각 강화 필요).</p>"
+        + _tbl(h.table, "{:.3f}")
+        + f"<p>구동 중 모터+인버터 종합 효율 {h.implied_motor_inverter_efficiency:.3f} "
+        f"(랩 모델은 배터리→휠 {d.vehicle.powertrain.efficiency:.2f} 상수).</p>"
+        + _img(plots.thermal_trace(h), "thermal")
+        + _img(
+            plots.motor_efficiency_map(
+                lm,
+                d.events.endurance.flying_lap,  # type: ignore[union-attr]
+                d.vehicle,
+            ),
+            "eff map",
+        )
+    )
+    return _section("thermal", "10b. 모터·인버터·어큐뮬레이터 발열 (E3, 가정값)", body)
+
+
 def _mc_section(d: ReportData) -> str:
     mc = d.extras["mc"]
     dist = mc.distribution()
