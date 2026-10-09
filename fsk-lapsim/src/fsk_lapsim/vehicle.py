@@ -126,11 +126,14 @@ def apply_component_change(
     old_components: Sequence[AeroComponent],
     new_components: Sequence[AeroComponent],
 ) -> Vehicle:
-    """Replace the aero package and update mass, CG height and weight distribution.
+    """Swap the aero package and update mass, CG height and weight distribution.
 
-    ``vehicle`` is assumed to *include* ``old_components`` (mass and aero). The aero
-    coefficients are re-synthesised from ``new_components``; the mass properties change by the
-    difference between the two component lists (component masses at their x/z positions).
+    ``vehicle`` is assumed to *include* ``old_components`` (mass and aero). The change is
+    applied as a **delta** on top of the vehicle's current aero: ClA, CdA and the front-axle
+    downforce coefficient change by (new − old) package values. When the vehicle aero equals
+    the synthesis of ``old_components`` this is identical to re-synthesising, and it keeps
+    perturbed or lumped-config aero values consistent (e.g. in Monte Carlo samples). Mass
+    properties change by the component masses at their x/z positions.
     """
     L = vehicle.wheelbase_m
     m0 = vehicle.mass_kg
@@ -148,7 +151,16 @@ def apply_component_change(
         raise ValueError("component change gives non-positive vehicle mass")
     x1 = (m0 * x0 + dmx) / m1
     z1 = (m0 * z0 + dmz) / m1
-    aero = synthesize(new_components, L, vehicle.aero.air_density_kg_m3)
+    rho = vehicle.aero.air_density_kg_m3
+    a_old, a_new = synthesize(old_components, L, rho), synthesize(new_components, L, rho)
+    a = vehicle.aero
+    cla = a.cla_m2 + a_new.cla_m2 - a_old.cla_m2
+    front = a.balance_front * a.cla_m2 + (
+        a_new.balance_front * a_new.cla_m2 - a_old.balance_front * a_old.cla_m2
+    )
+    if cla <= 0.0:
+        raise ValueError("component change gives non-positive total ClA")
+    aero = Aero(cla, a.cda_m2 + a_new.cda_m2 - a_old.cda_m2, front / cla, rho)
     return dataclasses.replace(
         vehicle,
         mass_kg=m1,

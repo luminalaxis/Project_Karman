@@ -154,6 +154,23 @@ def build_report_data(
     bal = optimise_balance(veh, setup, sopt, n_scan=9 if opts.quick else 15)
     say("active aero")
     drs = drs_event_gains(veh, DRSSettings.load(opts.drs), setup, sopt)
+    extras: dict[str, Any] = {}
+    if opts.montecarlo_samples > 1:
+        import os
+
+        from .analysis.montecarlo import run_montecarlo
+
+        say("monte carlo")
+        extras["mc"] = run_montecarlo(
+            veh,
+            opts.montecarlo_samples,
+            0,
+            setup,
+            unc,
+            cands,
+            comps,
+            workers=min(4, os.cpu_count() or 1),
+        )
     ref_lap = None
     if opts.reference_track:
         say("reference track")
@@ -516,6 +533,8 @@ def render_html(d: ReportData) -> str:
             body += _img(plots.track_map(tr, rl), "fsk map")
         parts.append(_section("reference", "11. 참고: FSK 2026 엔듀런스 중심선", body))
 
+    if "mc" in d.extras:
+        parts.append(_mc_section(d))
     for hook in EXTRA_SECTIONS:
         parts.append(hook(d))
 
@@ -537,6 +556,43 @@ def render_html(d: ReportData) -> str:
         + "".join(parts)
         + "</main></body></html>"
     )
+
+
+def _mc_section(d: ReportData) -> str:
+    mc = d.extras["mc"]
+    dist = mc.distribution()
+    body = (
+        f"<p>{mc.n} 샘플. 차량 가정값(uncertainty.yaml), 2D→3D 변환 계수"
+        "(엔드플레이트 계수·e·k 보정, 후보 공통), "
+        "후보별 CFD 오차(Cl 2 %, Cd 4 %)를 함께 뽑았다. 범위 자체가 가정이다.</p>"
+        + _tbl(dist, "{:.3f}")
+        + _img(
+            plots.histogram(
+                mc.matrix("autocross")["base"].to_numpy(),
+                "autocross time [s]",
+                "Autocross lap time distribution (base car)",
+                [("nominal", float(mc.nominal.loc["base", "autocross"]))],
+            ),
+            "mc hist",
+        )
+    )
+    if mc.candidates():
+        dummy = (
+            '<div class="box dummy"><b>DUMMY 후보</b> — 확률은 형식 확인용입니다.</div>'
+            if d.comparison.dummy
+            else ""
+        )
+        for metric in ("autocross", "endurance_lap"):
+            body += (
+                f"<h3>{metric}: 순위 견고성 — 전체 순위가 명목과 같을 확률 "
+                f"{mc.p_ranking_unchanged(metric):.2f}</h3>"
+                + dummy
+                + _tbl(mc.rank_stats(metric), "{:.3f}")
+                + "<p>가까운 후보 쌍의 순위 역전 확률:</p>"
+                + _tbl(mc.pairwise_flip(metric).head(10), "{:.3f}")
+            )
+        body += _img(plots.rank_probability(mc.rank_stats("autocross"), "autocross"), "mc rank")
+    return _section("montecarlo", "11b. 몬테카를로 불확실성 (E1)", body)
 
 
 LIMITS_HTML = """<ul>

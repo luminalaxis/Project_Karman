@@ -403,3 +403,26 @@ def measured_vs_sim(
     ax.set_title(title, loc="left")
     fig.tight_layout()
     return fig
+
+
+def rank_probability(stats: object, metric: str) -> Figure:
+    """P(fastest) and P(same rank as nominal) per candidate (Monte Carlo)."""
+    import pandas as pd
+
+    df: pd.DataFrame = stats  # type: ignore[assignment]
+    fig, axs = plt.subplots(1, 2, figsize=(10, 0.35 * len(df) + 1.6), sharey=True)
+    labels = [f"{r.variant} (#{r.nominal_rank})" for r in df.itertuples()]
+    for ax, col, title in (
+        (axs[0], "p_fastest", "P(fastest)"),
+        (axs[1], "p_same_rank", "P(same rank as nominal)"),
+    ):
+        ax.barh(labels, df[col], color=SERIES[0], height=0.6)
+        for i, v in enumerate(df[col]):
+            ax.text(v + 0.01, i, f"{v:.2f}", va="center", fontsize=8, color=INK)
+        ax.set_xlim(0, 1.1)
+        ax.set_title(title, loc="left")
+        ax.grid(axis="y", visible=False)
+    axs[0].invert_yaxis()
+    fig.suptitle(f"Monte Carlo ranking robustness — {metric}", x=0.01, ha="left", fontsize=10)
+    fig.tight_layout()
+    return fig

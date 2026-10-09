@@ -107,6 +107,17 @@ smoothing_sigma_m: 0.3         # 위치 노이즈 σ [m] (splprep s = n·σ²). 
 ### `drs.yaml`, `uncertainty.yaml`, `thermal.yaml`, `scoring.yaml`
 각 파일 주석 참고. 모두 가정값.
 
+## 확장 기능
+
+### E1 몬테카를로 (`fsk-lapsim montecarlo`)
+```bash
+fsk-lapsim montecarlo --n 200 --workers 4                 # 가정 범위 → 랩타임 분포, 후보 순위 역전 확률
+fsk-lapsim montecarlo --n 200 --retrim-front --plot mc.png  # 후보마다 프론트윙 재트림 (밸런스 효과 제거)
+fsk-lapsim report --mc 100                                 # 리포트에 몬테카를로 절 추가
+```
+범위는 `configs/uncertainty.yaml` (σ, 균등 범위, 클립). 출력: 기준 차량 랩타임 분포 (p5/p50/p95), 후보별 P(1위), 평균 순위,
+P(명목 순위 유지), 가까운 후보 쌍의 순위 역전 확률, 전체 순위가 그대로일 확률.
+
 ## 결과 읽는 법
 - **민감도 표**: "표시 단위만큼 늘렸을 때 몇 초" (양수 = 느려짐). 엔듀런스는 총 시간.
 - **등가 환산**: "+1 kg 과 같은 오토크로스 시간 손실을 내는 ClA/CdA 변화" — 무게와 공력의 교환 비율.

@@ -343,6 +343,81 @@ def report(
 
 
 @app.command()
+def montecarlo(
+    vehicle: VehicleOpt = None,
+    events: EventsOpt = None,
+    n: Annotated[int, typer.Option("--n", help="number of samples")] = 100,
+    seed: int = 0,
+    workers: Annotated[int, typer.Option(help="parallel processes")] = 4,
+    candidates: Annotated[str | None, typer.Option(help="rear-wing CSV (default DUMMY)")] = None,
+    no_candidates: Annotated[bool, typer.Option(help="only the base car")] = False,
+    uncertainty: Annotated[str | None, typer.Option(help="uncertainty.yaml")] = None,
+    retrim_front: Annotated[
+        bool, typer.Option(help="keep balance by re-trimming front wing")
+    ] = False,
+    out: OutOpt = None,
+    plot: PlotOpt = None,
+) -> None:
+    """Monte Carlo: lap-time distribution and rear-wing ranking flip probabilities (E1)."""
+    from .aero import components_from_config
+    from .analysis.montecarlo import run_montecarlo
+    from .analysis.uncertainty import Uncertainty
+    from .config import load_aero_components_config
+    from .wing import read_wing_candidates
+
+    veh = load_vehicle(vehicle)
+    setup = EventSetup.load(events)
+    comps = components_from_config(load_aero_components_config())
+    cands = []
+    if not no_candidates:
+        path = (
+            resolve_path(candidates)
+            if candidates
+            else (default_data_dir() / "rear_wing_candidates_DUMMY.csv")
+        )
+        cands = read_wing_candidates(path)
+        if any(c.is_dummy for c in cands):
+            typer.echo("*** DUMMY candidate data — probabilities are NOT meaningful ***")
+    res = run_montecarlo(
+        veh,
+        n,
+        seed,
+        setup,
+        Uncertainty.load(uncertainty),
+        cands,
+        comps,
+        workers=workers,
+        retrim_front=retrim_front,
+    )
+    typer.echo("base-car lap time distribution:")
+    typer.echo(res.distribution().round(3).to_string(index=False))
+    for metric in ("autocross", "endurance_lap"):
+        if cands:
+            typer.echo(
+                f"\n{metric}: ranking robustness "
+                f"(P(full ranking unchanged) = {res.p_ranking_unchanged(metric):.2f})"
+            )
+            typer.echo(res.rank_stats(metric).round(3).to_string(index=False))
+            typer.echo("closest pairs:")
+            typer.echo(res.pairwise_flip(metric).head(8).round(3).to_string(index=False))
+    _save_df(res.times, out)
+    if plot:
+        if cands:
+            _save_fig(plots.rank_probability(res.rank_stats("autocross"), "autocross"), plot)
+        else:
+            x = res.matrix("autocross")["base"]
+            _save_fig(
+                plots.histogram(
+                    x,
+                    "autocross time [s]",
+                    "Monte Carlo autocross",
+                    [("nominal", float(res.nominal.loc["base", "autocross"]))],
+                ),
+                plot,
+            )
+
+
+@app.command()
 def assumptions(
     vehicle: VehicleOpt = None,
     events: EventsOpt = None,

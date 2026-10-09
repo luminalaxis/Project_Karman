@@ -170,3 +170,35 @@ def test_report_quick(tmp_path):
     assert html.count("<img") >= 12
     out = _ok(["report", "--quick", "--out", str(tmp_path / "r.html")])
     assert (tmp_path / "r.html").stat().st_size > 100_000 and "saved" in out
+
+
+def test_montecarlo_command(tmp_path):
+    out = _ok(
+        [
+            "montecarlo",
+            "--n",
+            "3",
+            "--workers",
+            "1",
+            "--retrim-front",
+            "--plot",
+            str(tmp_path / "mc.png"),
+            "--out",
+            str(tmp_path / "mc.csv"),
+        ]
+    )
+    assert "ranking robustness" in out and "DUMMY" in out
+    assert (tmp_path / "mc.png").exists() and len(pd.read_csv(tmp_path / "mc.csv")) == 3 * 9 * 2
+    out = _ok(
+        [
+            "montecarlo",
+            "--n",
+            "2",
+            "--workers",
+            "1",
+            "--no-candidates",
+            "--plot",
+            str(tmp_path / "h.png"),
+        ]
+    )
+    assert "distribution" in out and (tmp_path / "h.png").exists()

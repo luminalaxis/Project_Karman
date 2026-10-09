@@ -65,12 +65,14 @@ class WingConversion:
     Attributes:
         endplate_factor: AR_eff = (span/chord) × factor when ``ar_eff`` is not given.
         oswald_e: Span efficiency e.
-        k_lift: Cl3D/Cl2D; ``None`` → AR_eff/(AR_eff + 2).
+        k_lift: Cl3D/Cl2D; ``None`` → k_lift_scale · AR_eff/(AR_eff + 2).
+        k_lift_scale: Correction multiplying the default k (uncertainty studies).
     """
 
     endplate_factor: float = 1.5
     oswald_e: float = 0.9
     k_lift: float | None = None
+    k_lift_scale: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,7 @@ def wing_2d_to_3d(
     k_lift: float | None = None,
     oswald_e: float = 0.9,
     endplate_factor: float = 1.5,
+    k_lift_scale: float = 1.0,
 ) -> Wing3D:
     """Rough finite-wing estimate from 2D section coefficients (see module docstring).
 
@@ -117,11 +120,12 @@ def wing_2d_to_3d(
         k_lift: Cl3D/Cl2D (default AR_eff/(AR_eff + 2)).
         oswald_e: Span efficiency for induced drag.
         endplate_factor: Used only when ``ar_eff`` is None.
+        k_lift_scale: Multiplies the default k (ignored when ``k_lift`` is given).
     """
     if chord_m <= 0 or span_m <= 0:
         raise ValueError("chord and span must be positive")
     ar = ar_eff if ar_eff is not None else span_m / chord_m * endplate_factor
-    k = k_lift if k_lift is not None else ar / (ar + 2.0)
+    k = k_lift if k_lift is not None else k_lift_scale * ar / (ar + 2.0)
     cl3 = k * cl_2d
     cdi = cl3 * cl3 / (math.pi * oswald_e * ar)
     return Wing3D(cl3, cd_2d + cdi, cdi, chord_m * span_m, ar, k, oswald_e)
