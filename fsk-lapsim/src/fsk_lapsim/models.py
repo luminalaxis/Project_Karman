@@ -96,8 +96,26 @@ class VehicleModel(abc.ABC):
         """Cornering limit [m/s²] at constant speed (see module docstring)."""
 
     @abc.abstractmethod
-    def ax_accel_max(self, v: ArrayLike, ay: ArrayLike) -> FloatArray:
-        """Maximum longitudinal acceleration [m/s²] (NaN if |ay| > ay_max(v))."""
+    def ax_accel_max(self, v: ArrayLike, ay: ArrayLike, power_limited: bool = True) -> FloatArray:
+        """Maximum longitudinal acceleration [m/s²] (NaN if |ay| > ay_max(v)).
+
+        With ``power_limited=False`` the powertrain cap is ignored (tyre/grip limit only).
+        Because the cap only bounds ax from above independently of ay,
+        ``ax_accel_max = min(tyre-only value, power_ax(v))`` exactly.
+        """
+
+    def ax_accel_parts(self, v: ArrayLike, ay: ArrayLike) -> dict[str, FloatArray]:
+        """Tyre-only acceleration limit of each constraint alone [m/s²].
+
+        The feasible accelerations of every constraint form an interval starting at the
+        reference state, so the tyre-only limit is the minimum over the parts. Each part is
+        smooth, which lets the GGV interpolate them separately without kink errors.
+        """
+        return {"tyre": self.ax_accel_max(v, ay, power_limited=False)}
+
+    def power_ax(self, v: ArrayLike) -> FloatArray:
+        """Acceleration [m/s²] allowed by the powertrain alone: (F_pt − drag − rolling)/m."""
+        return (self.drive_limit_n(v) - self.resistance_n(v)) / self.vehicle.mass_kg
 
     @abc.abstractmethod
     def ax_brake_min(self, v: ArrayLike, ay: ArrayLike) -> FloatArray:
@@ -141,9 +159,11 @@ class PointMassModel(VehicleModel):
         r = np.clip(self._need_ref(v) / fx_max, 0.0, 1.0)
         return self._ay_grip(v) * np.sqrt(1.0 - r * r)
 
-    def ax_accel_max(self, v: ArrayLike, ay: ArrayLike) -> FloatArray:  # noqa: D102
+    def ax_accel_max(self, v: ArrayLike, ay: ArrayLike, power_limited: bool = True) -> FloatArray:  # noqa: D102
         v, ay = np.broadcast_arrays(np.asarray(v, float), np.asarray(ay, float))
-        f = np.minimum(self._fx_tyre(v, ay), self.drive_limit_n(v))
+        f = self._fx_tyre(v, ay)
+        if power_limited:
+            f = np.minimum(f, self.drive_limit_n(v))
         out = (f - self.resistance_n(v)) / self.vehicle.mass_kg
         return np.where(np.abs(ay) <= self.ay_max(v) * (1 + 1e-12) + 1e-12, out, np.nan)
 
@@ -279,8 +299,9 @@ class AxleModel(VehicleModel):
     def _accel_bisect(
         self, v: FloatArray, ay: FloatArray, res: FloatArray, f_pt: FloatArray, lo: FloatArray
     ) -> FloatArray:
+        """Largest feasible ax ≥ ``lo`` (``lo`` must be feasible), upper bound from ``f_pt``."""
         m = self.vehicle.mass_kg
-        top = -res / m + f_pt / m  # powertrain-limited upper bound
+        top = -res / m + f_pt / m
         top_ok = self._feasible(v, top, ay, res, f_pt)
         lo = lo.copy()
         hi = top.copy()
@@ -290,6 +311,13 @@ class AxleModel(VehicleModel):
             lo = np.where(good, mid, lo)
             hi = np.where(good, hi, mid)
         return np.where(top_ok, np.maximum(top, lo), lo)
+
+    def _grip_force_bound(self, v: FloatArray) -> FloatArray:
+        """Upper bound on any tyre force [N] (replaces the powertrain cap in tyre-only mode)."""
+        t = self.vehicle.tire
+        n = self.vehicle.weight_n + self.downforce_n(v)
+        mu_b = t.mu0 * (1.0 - t.load_sensitivity) if t.load_sensitivity < 0 else t.mu(n)
+        return 1.05 * t.mu_lon_lat_ratio * mu_b * n + 1.0
 
     # -- limits --------------------------------------------------------------------------
     def ay_max(self, v: ArrayLike) -> FloatArray:  # noqa: D102
@@ -302,13 +330,50 @@ class AxleModel(VehicleModel):
         out["total"] = np.minimum(np.minimum(out["front"], out["rear"]), out["drive"])
         return out
 
-    def ax_accel_max(self, v: ArrayLike, ay: ArrayLike) -> FloatArray:  # noqa: D102
+    def ax_accel_max(self, v: ArrayLike, ay: ArrayLike, power_limited: bool = True) -> FloatArray:  # noqa: D102
         v, ay = np.broadcast_arrays(np.asarray(v, float), np.asarray(ay, float))
         res = self.resistance_n(v)
         f_pt = self.drive_limit_n(v)
         ref = self._ax_ref_straight(v, res, f_pt)
         ok0 = self._feasible(v, ref, ay, res, f_pt)
-        return np.where(ok0, self._accel_bisect(v, ay, res, f_pt, ref), np.nan)
+        cap = f_pt if power_limited else np.maximum(f_pt, self._grip_force_bound(v))
+        return np.where(ok0, self._accel_bisect(v, ay, res, cap, ref), np.nan)
+
+    def ax_accel_parts(self, v: ArrayLike, ay: ArrayLike) -> dict[str, FloatArray]:
+        """Tyre-only acceleration limits: front lateral grip (front unloads) and traction."""
+        v, ay = np.broadcast_arrays(np.asarray(v, float), np.asarray(ay, float))
+        veh = self.vehicle
+        m = veh.mass_kg
+        res = self.resistance_n(v)
+        f_pt = self.drive_limit_n(v)
+        ref = self._ax_ref_straight(v, res, f_pt)
+        ok0 = self._feasible(v, ref, ay, res, f_pt)
+        bound = np.maximum(f_pt, self._grip_force_bound(v))
+        # traction (rear ellipse, LSD/open) with the powertrain cap removed
+        lo, hi = ref.copy(), -res / m + bound / m
+        top_ok = self._feasible(v, hi, ay, res, bound, "drive")
+        for _ in range(N_BISECT):
+            mid = 0.5 * (lo + hi)
+            good = self._feasible(v, mid, ay, res, bound, "drive")
+            lo = np.where(good, mid, lo)
+            hi = np.where(good, hi, mid)
+        drive = np.where(top_ok, -res / m + bound / m, lo)
+        # front lateral grip: bracket up to the acceleration that unloads the front axle
+        fzf0 = veh.weight_n * veh.b_m / veh.wheelbase_m + veh.aero.balance_front * self.downforce_n(
+            v
+        )
+        wheelie = (
+            fzf0 * veh.wheelbase_m / (m * veh.cg_height_m)
+            if veh.cg_height_m > 0
+            else (np.full_like(v, 1e3))
+        )
+        lo, hi = ref.copy(), np.maximum(wheelie, ref)
+        for _ in range(N_BISECT):
+            mid = 0.5 * (lo + hi)
+            good = self._feasible(v, mid, ay, res, bound, "front")
+            lo = np.where(good, mid, lo)
+            hi = np.where(good, hi, mid)
+        return {"front": np.where(ok0, lo, np.nan), "drive": np.where(ok0, drive, np.nan)}
 
     def ax_brake_min(self, v: ArrayLike, ay: ArrayLike) -> FloatArray:  # noqa: D102
         v, ay = np.broadcast_arrays(np.asarray(v, float), np.asarray(ay, float))

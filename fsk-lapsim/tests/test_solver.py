@@ -237,6 +237,7 @@ def test_ggv_interpolation_is_exact_on_grid(baseline):
     i, j = 40, 10
     v = g.v_grid[i]
     ay = math.sin(g.theta_grid[j]) * g.ay_max[i]
-    assert acc(v, ay) == pytest.approx(g.ax_acc[i, j], abs=1e-9)
+    expect = min(g.ax_acc[0, i, j], float(g.power_ax_at(v)))
+    assert acc(v, ay) == pytest.approx(expect, abs=1e-9)
     assert brk(v, -ay) == pytest.approx(g.ax_brk[i, j], abs=1e-9)
-    assert float(g.ax_acc_at(v, ay)) == pytest.approx(g.ax_acc[i, j], abs=1e-9)
+    assert float(g.ax_acc_at(v, ay)) == pytest.approx(expect, abs=1e-9)

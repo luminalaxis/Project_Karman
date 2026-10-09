@@ -2,7 +2,7 @@
 
 Grid coordinates:
 
-* speed: uniform ``v_i = i·dv`` from 0 to just above the top speed;
+* speed: uniform from 0 to exactly the top speed (spacing ≤ dv);
 * lateral: θ_j uniform on [0, π/2] with ay = sin(θ_j)·ay_max(v). Near the cornering limit the
   friction ellipse gives ax ∝ √(1 − (ay/ay_max)²) = cos θ, which is smooth in θ, so linear
   interpolation in θ stays accurate right up to the limit.
@@ -11,6 +11,13 @@ Grid coordinates:
 limit is linear in v²). ``ax`` tables are interpolated bilinearly in (v, θ).
 At θ = π/2 (ay = ay_max) the car can hold its speed, so ax_acc ≥ 0 ≥ ax_brk on the limit
 (see :mod:`fsk_lapsim.models`).
+
+The acceleration limit is the minimum of independent constraints (each feasible set is an
+interval starting at the reference state). The GGV stores one smooth table per **tyre**
+constraint (model B: front lateral grip as the front unloads, rear traction) and evaluates the
+powertrain cap ``power_ax(v)`` in closed form; the lookup returns the minimum. The kinks where
+one constraint takes over from another are thus exact instead of being smeared by the
+interpolation.
 """
 
 from __future__ import annotations
@@ -38,7 +45,8 @@ class GGV:
         v_grid: Speed grid [m/s], uniform from 0.
         theta_grid: Lateral grid angle θ [rad], uniform on [0, π/2].
         ay_max: Constant-speed cornering limit at each grid speed [m/s²].
-        ax_acc: Max acceleration [m/s²], shape (n_v, n_θ).
+        ax_acc: Tyre-limited max acceleration per constraint [m/s²], shape (n_parts, n_v, n_θ)
+            (no powertrain cap).
         ax_brk: Max deceleration as negative ax [m/s²], shape (n_v, n_θ).
         v_top: Reachable top speed [m/s] (rpm- or drag-limited).
         model_name: Name of the vehicle model used.
@@ -51,23 +59,46 @@ class GGV:
     ax_brk: NDArray[np.float64]
     v_top: float
     model_name: str
+    power: tuple[float, float, float, float, float, float]
+    """(F_torque [N], P·η [W], v_rpm [m/s], R0 [N], k_v2 [N·s²/m²], m [kg]) for power_ax."""
 
     @classmethod
-    def build(cls, model: VehicleModel, dv_mps: float = 0.25, n_theta: int = 37) -> GGV:
+    def build(cls, model: VehicleModel, dv_mps: float = 0.25, n_theta: int = 73) -> GGV:
         """Evaluate ``model`` on the grid (vectorised)."""
         v_top = top_speed(model)
-        n_v = math.ceil((v_top + 1.0) / dv_mps) + 1
-        v_grid = np.arange(n_v) * dv_mps
+        # end the grid exactly at the top speed: the drive force drops to 0 beyond the rpm
+        # limit, and a cell straddling that jump would smear it into the interpolation
+        n_v = max(math.ceil(v_top / dv_mps), 2)
+        v_grid = np.linspace(0.0, v_top, n_v + 1)
         theta = np.linspace(0.0, HALF_PI, n_theta)
         ay_max = model.ay_max(v_grid)
         vv = np.repeat(v_grid[:, None], n_theta, axis=1)
         ay = np.sin(theta)[None, :] * ay_max[:, None]
         ay[:, -1] = ay_max  # exactly on the limit
-        ax_acc = model.ax_accel_max(vv, ay)
+        ax_acc = np.stack(list(model.ax_accel_parts(vv, ay).values()))
         ax_brk = model.ax_brake_min(vv, ay)
         if np.isnan(ax_acc).any() or np.isnan(ax_brk).any():  # pragma: no cover - guard
             raise RuntimeError("GGV grid contains infeasible points")
-        return cls(v_grid, theta, ay_max, ax_acc, ax_brk, v_top, model.name)
+        veh = model.vehicle
+        pt, aero, tire = veh.powertrain, veh.aero, veh.tire
+        q = 0.5 * aero.air_density_kg_m3
+        power = (
+            pt.torque_force_n(tire.radius_m),
+            pt.max_power_w * pt.efficiency,
+            veh.v_max_mps,
+            tire.rolling_resistance_coeff * veh.weight_n,
+            q * aero.cda_m2 + tire.rolling_resistance_coeff * q * aero.cla_m2,
+            veh.mass_kg,
+        )
+        return cls(v_grid, theta, ay_max, ax_acc, ax_brk, v_top, model.name, power)
+
+    def power_ax_at(self, v: ArrayLike) -> NDArray[np.float64]:
+        """Powertrain-limited acceleration (F_pt − resistance)/m [m/s²] (closed form)."""
+        f_t, p_eta, v_rpm, r0, k2, m = self.power
+        v = np.asarray(v, float)
+        f = np.minimum(f_t, p_eta / np.maximum(v, 1e-3))
+        f = np.where(v <= v_rpm * (1.0 + 1e-9), f, 0.0)
+        return (f - r0 - k2 * v * v) / m
 
     # -- vectorised lookups --------------------------------------------------------------
     def ay_max_at(self, v: ArrayLike) -> NDArray[np.float64]:
@@ -98,8 +129,9 @@ class GGV:
         return a0 + fy * (a1 - a0)
 
     def ax_acc_at(self, v: ArrayLike, ay: ArrayLike) -> NDArray[np.float64]:
-        """Interpolated max acceleration [m/s²] (|ay| beyond the limit is clamped to it)."""
-        return self._bilinear(self.ax_acc, v, ay)
+        """Max acceleration [m/s²]: min(interpolated tyre limits, power limit)."""
+        tyre = np.min([self._bilinear(t, v, ay) for t in self.ax_acc], axis=0)
+        return np.minimum(tyre, self.power_ax_at(v))
 
     def ax_brk_at(self, v: ArrayLike, ay: ArrayLike) -> NDArray[np.float64]:
         """Interpolated max deceleration (negative) [m/s²]."""
@@ -131,11 +163,13 @@ class GGV:
         aym = self.ay_max.tolist()
         nth = len(self.theta_grid)
         inv_dth = 1.0 / (self.theta_grid[1] - self.theta_grid[0])
-        acc = self.ax_acc.tolist()
+        acc_parts = [t.tolist() for t in self.ax_acc]
         brk = self.ax_brk.tolist()
         asin = math.asin
+        f_t, p_eta, v_rpm, r0, k2, mass = self.power
+        v_rpm_tol = v_rpm * (1.0 + 1e-9)
 
-        def make(table: list[list[float]]) -> ScalarLookup:
+        def make(tables: list[list[list[float]]], with_power: bool) -> ScalarLookup:
             def look(v: float, ay: float) -> float:
                 x = v * inv_dv
                 i = int(x)
@@ -156,20 +190,36 @@ class GGV:
                 if j > nth - 2:
                     j = nth - 2
                 fy = y - j
-                r0 = table[i]
-                r1 = table[i + 1]
-                c0 = r0[j] + fx * (r1[j] - r0[j])
-                c1 = r0[j + 1] + fx * (r1[j + 1] - r0[j + 1])
-                return c0 + fy * (c1 - c0)
+                a = 1e30
+                for table in tables:
+                    row0 = table[i]
+                    row1 = table[i + 1]
+                    c0 = row0[j] + fx * (row1[j] - row0[j])
+                    c1 = row0[j + 1] + fx * (row1[j + 1] - row0[j + 1])
+                    c = c0 + fy * (c1 - c0)
+                    if c < a:
+                        a = c
+                if with_power:
+                    if v > v_rpm_tol:
+                        f = 0.0
+                    else:
+                        f = p_eta / (v if v > 1e-3 else 1e-3)
+                        if f > f_t:
+                            f = f_t
+                    ap = (f - r0_ - k2 * vv) / mass
+                    if ap < a:
+                        a = ap
+                return a
 
             return look
 
-        return make(acc), make(brk)
+        r0_ = r0
+        return make(acc_parts, True), make([brk], False)
 
 
 @lru_cache(maxsize=256)
 def cached_ggv(
-    vehicle: Vehicle, model: str = "axle", dv_mps: float = 0.25, n_theta: int = 37
+    vehicle: Vehicle, model: str = "axle", dv_mps: float = 0.25, n_theta: int = 73
 ) -> GGV:
     """GGV for a (hashable, frozen) vehicle, memoised — sweeps reuse identical vehicles."""
     return GGV.build(make_model(vehicle, model), dv_mps, n_theta)

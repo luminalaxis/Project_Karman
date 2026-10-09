@@ -53,7 +53,7 @@ class SolverOptions:
     ds_m: float = 0.25
     model: str = "axle"
     ggv_dv_mps: float = 0.25
-    ggv_n_theta: int = 37
+    ggv_n_theta: int = 73
     max_periodic_iter: int = 60
     periodic_tol_mps: float = 1e-7
 
