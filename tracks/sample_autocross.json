@@ -1,0 +1,29 @@
+{
+  "name": "sample_autocross",
+  "description": "Synthetic FS-style autocross for testing, NOT the real FSK layout.",
+  "closed": false,
+  "segments": [
+    {"type": "straight", "length": 60},
+    {"type": "corner", "radius": 9,  "angle": 180, "direction": "left"},
+    {"type": "straight", "length": 40},
+    {"type": "corner", "radius": 12, "angle": 50, "direction": "right"},
+    {"type": "corner", "radius": 12, "angle": 50, "direction": "left"},
+    {"type": "corner", "radius": 12, "angle": 50, "direction": "right"},
+    {"type": "corner", "radius": 12, "angle": 50, "direction": "left"},
+    {"type": "corner", "radius": 12, "angle": 25, "direction": "right"},
+    {"type": "straight", "length": 70},
+    {"type": "corner", "radius": 15, "angle": 90, "direction": "right"},
+    {"type": "straight", "length": 50},
+    {"type": "corner", "radius": 10, "angle": 60, "direction": "left"},
+    {"type": "corner", "radius": 10, "angle": 60, "direction": "right"},
+    {"type": "straight", "length": 75},
+    {"type": "corner", "radius": 20, "angle": 120, "direction": "left"},
+    {"type": "straight", "length": 40},
+    {"type": "corner", "radius": 8,  "angle": 180, "direction": "right"},
+    {"type": "straight", "length": 55},
+    {"type": "corner", "radius": 30, "angle": 90, "direction": "left"},
+    {"type": "straight", "length": 45},
+    {"type": "corner", "radius": 12, "angle": 90, "direction": "right"},
+    {"type": "straight", "length": 30}
+  ]
+}

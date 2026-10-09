@@ -1,0 +1,29 @@
+{
+  "name": "FSK EV baseline",
+  "mass": 280.0,
+  "cg_height": 0.28,
+  "wheelbase": 1.53,
+  "weight_dist_front": 0.46,
+  "rolling_resistance": 0.015,
+  "tyre": {
+    "mu_x": 1.55,
+    "mu_y": 1.60,
+    "load_sensitivity": 0.10,
+    "Fz0": 700.0
+  },
+  "aero": {
+    "ClA": 3.5,
+    "CdA": 1.3,
+    "balance_front": 0.45,
+    "h_cp": 0.35,
+    "rho": 1.2
+  },
+  "powertrain": {
+    "max_power": 80000.0,
+    "max_torque": 140.0,
+    "max_rpm": 6500.0,
+    "gear_ratio": 4.0,
+    "wheel_radius": 0.2,
+    "efficiency": 0.90
+  }
+}
