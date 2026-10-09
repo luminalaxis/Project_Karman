@@ -202,3 +202,27 @@ def test_montecarlo_command(tmp_path):
         ]
     )
     assert "distribution" in out and (tmp_path / "h.png").exists()
+
+
+def test_gps_command(tmp_path):
+    out = _ok(["gps", "--plot", str(tmp_path / "g.png"), "--export-track", str(tmp_path / "t.csv")])
+    assert "DUMMY" in out and "lap_time_ratio" in out and "laps: #0" in out
+    assert (tmp_path / "g.png").exists() and len(pd.read_csv(tmp_path / "t.csv")) > 100
+    out = _ok(["gps", "--method", "position", "--lap", "5"])
+    assert "lap_time_sim_s" in out
+    res = runner.invoke(app, ["gps", "--gate", "0.001"])
+    assert res.exit_code != 0
+
+
+def test_gps_low_rate_warning(tmp_path, baseline):
+    from fsk_lapsim.gps import synth_nmea
+    from fsk_lapsim.trackgen import load_track
+
+    tr = load_track("tracks/template_endurance_B.yaml")
+    from fsk_lapsim.solver import simulate
+
+    lines = synth_nmea(tr, simulate(baseline, tr), laps=3, rate_hz=1.0, seed=0)
+    p = tmp_path / "slow.nmea"
+    p.write_text("\n".join(lines), encoding="ascii")
+    out = _ok(["gps", str(p)])
+    assert "WARNING" in out and "1 Hz" in out

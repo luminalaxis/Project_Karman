@@ -418,6 +418,57 @@ def montecarlo(
 
 
 @app.command()
+def gps(
+    log: Annotated[
+        str | None, typer.Argument(help="NMEA log (default: bundled DUMMY sample)")
+    ] = None,
+    vehicle: VehicleOpt = None,
+    model: ModelOpt = "axle",
+    lap: Annotated[int, typer.Option(help="lap index to build the track from")] = 0,
+    method: Annotated[str, typer.Option(help="course | position")] = "course",
+    course_sigma: Annotated[float, typer.Option(help="course noise σ [deg]")] = 0.5,
+    gate: Annotated[float, typer.Option(help="start gate radius [m]")] = 15.0,
+    export_track: Annotated[Path | None, typer.Option(help="write x,y CSV of the track")] = None,
+    plot: PlotOpt = None,
+) -> None:
+    """GPS (NMEA, NEO-6M) log → laps, track, simulated vs measured speed (E2)."""
+    from .gps import compare_trace, read_nmea, split_laps, track_from_lap
+
+    path = resolve_path(log) if log else default_data_dir() / "gps" / "sample_DUMMY.nmea"
+    if "DUMMY" in path.name:
+        typer.echo("*** DUMMY GPS log (synthetic) ***")
+    df = read_nmea(path)
+    dt = float(np.median(np.diff(df["t_s"])))
+    typer.echo(f"{len(df)} fixes, {1 / dt:.1f} Hz, {df['t_s'].iloc[-1]:.1f} s")
+    if dt > 0.25:
+        typer.echo(
+            "WARNING: logging below 4 Hz under-samples hairpins (lap time too fast); "
+            "set the receiver to 5–10 Hz (NEO-6M default is 1 Hz)"
+        )
+    laps = split_laps(df, gate_radius_m=gate)
+    if not laps:
+        raise typer.BadParameter("no complete lap found (check --gate)")
+    typer.echo("laps: " + ", ".join(f"#{lp.index} {lp.lap_time_s:.3f} s" for lp in laps))
+    sel = laps[min(lap, len(laps) - 1)]
+    tr = track_from_lap(sel, method=method, course_sigma_deg=course_sigma, name=path.stem)
+    veh = load_vehicle(vehicle)
+    sim = simulate(veh, tr, SolverOptions(model=model))
+    cmp = compare_trace(sel, tr, sim)
+    typer.echo(pd.Series({**tr.summary(), **cmp.summary()}).round(3).to_string())
+    if export_track:
+        s = np.arange(0.0, tr.length_m, 0.5)
+        x, y = tr.xy(s)
+        _save_df(pd.DataFrame({"x": x, "y": y}), export_track)
+    if plot:
+        _save_fig(
+            plots.measured_vs_sim(
+                cmp.s_m, cmp.v_measured_mps, sim, f"GPS lap #{sel.index} vs simulation"
+            ),
+            plot,
+        )
+
+
+@app.command()
 def assumptions(
     vehicle: VehicleOpt = None,
     events: EventsOpt = None,

@@ -118,6 +118,16 @@ fsk-lapsim report --mc 100                                 # 리포트에 몬테
 범위는 `configs/uncertainty.yaml` (σ, 균등 범위, 클립). 출력: 기준 차량 랩타임 분포 (p5/p50/p95), 후보별 P(1위), 평균 순위,
 P(명목 순위 유지), 가까운 후보 쌍의 순위 역전 확률, 전체 순위가 그대로일 확률.
 
+### E2 GPS 로그 (`fsk-lapsim gps LOG.nmea`)
+```bash
+fsk-lapsim gps                                   # 내장 DUMMY 로그 (합성)
+fsk-lapsim gps run1.nmea --lap 2 --plot gps.png --export-track run1_track.csv
+```
+NEO-6M 등 NMEA 0183 (RMC/GGA/VTG, 토커 GP/GN/GL) → 랩 분할 (첫 고정점 = 시작점, `--gate` 반경) → 트랙 재구성
+(기본 `course`: 도플러 진행방향·속도로 곡률 κ = dψ/ds, `position`: 위치 스플라인) → 시뮬레이션 → 실측 속도와 비교
+(랩타임 비, 속도 RMSE, 평균 차이). **수신기는 5–10 Hz 로 설정**할 것 (1 Hz 기본값은 헤어핀을 놓쳐 시뮬레이션이 7–14 % 빨라짐).
+만든 트랙 CSV 는 트랙 YAML `type: csv` 로 다시 쓸 수 있다 (`smoothing_sigma_m` 작게).
+
 ## 결과 읽는 법
 - **민감도 표**: "표시 단위만큼 늘렸을 때 몇 초" (양수 = 느려짐). 엔듀런스는 총 시간.
 - **등가 환산**: "+1 kg 과 같은 오토크로스 시간 손실을 내는 ClA/CdA 변화" — 무게와 공력의 교환 비율.
