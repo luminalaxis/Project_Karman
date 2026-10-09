@@ -7,17 +7,17 @@
   "rolling_resistance": 0.015,
   "tyre": {
     "mu_x": 1.55,
-    "mu_y": 1.60,
-    "load_sensitivity": 0.10,
+    "mu_y": 1.6,
+    "load_sensitivity": 0.1,
     "Fz0": 700.0
   },
   "aero": {
     "rho": 1.2,
     "devices": {
-      "front": {"ClA": 1.20, "CdA": 0.33, "x_cp": -0.50, "h_cp": 0.25},
-      "mid":   {"ClA": 1.05, "CdA": 0.15, "x_cp":  0.85, "h_cp": 0.10},
-      "rear":  {"ClA": 1.40, "CdA": 0.52, "x_cp":  1.90, "h_cp": 0.95},
-      "body":  {"ClA": 0.00, "CdA": 0.32, "x_cp":  0.75, "h_cp": 0.45}
+      "front": {"ClA": 1.2, "CdA": 0.33, "x_cp": -0.5, "h_cp": 0.25, "ClA_min": 0.6, "ClA_max": 1.8, "mass_per_cla": 3.0},
+      "mid": {"ClA": 1.05, "CdA": 0.15, "x_cp": 0.85, "h_cp": 0.1, "ClA_min": 0.6, "ClA_max": 1.6, "mass_per_cla": 2.0},
+      "rear": {"ClA": 1.4, "CdA": 0.52, "x_cp": 1.9, "h_cp": 0.95, "ClA_min": 0.6, "ClA_max": 2.0, "mass_per_cla": 3.5},
+      "body": {"ClA": 0.0, "CdA": 0.32, "x_cp": 0.75, "h_cp": 0.45}
     }
   },
   "powertrain": {
@@ -26,6 +26,6 @@
     "max_rpm": 6500.0,
     "gear_ratio": 4.0,
     "wheel_radius": 0.2,
-    "efficiency": 0.90
+    "efficiency": 0.9
   }
 }

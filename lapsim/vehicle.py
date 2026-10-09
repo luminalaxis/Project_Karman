@@ -47,6 +47,13 @@ class AeroDevice:
     x_cp: float | None = None
     h_cp: float = 0.35          # height of this device's drag force [m]
     front_share: float | None = None
+    # design space for target optimisation (lapsim.targets); all optional
+    ClA_min: float | None = None   # default 0
+    ClA_max: float | None = None   # default 2 x current ClA
+    CdA0: float | None = None      # drag at zero downforce [m^2]
+    k_induced: float | None = None  # CdA = CdA0 + k_induced * ClA^2
+    induced_share: float = 0.5     # used to derive CdA0/k_induced when they are not given
+    mass_per_cla: float = 0.0      # device mass change per unit ClA change [kg]
 
     def share(self, wheelbase: float) -> float:
         if self.front_share is not None:
@@ -54,6 +61,34 @@ class AeroDevice:
         if self.x_cp is None:
             raise ValueError("aero device needs x_cp or front_share")
         return 1.0 - self.x_cp / wheelbase
+
+    # ---- device polar -------------------------------------------------------
+    @property
+    def tunable(self) -> bool:
+        """Devices that make downforce (or declare a ClA_max) are varied by the optimiser."""
+        return self.ClA > 0 or (self.ClA_max or 0) > 0
+
+    def polar(self) -> tuple[float, float]:
+        """(CdA0, k): CdA(ClA) = CdA0 + k*ClA^2, anchored on the current operating point."""
+        if self.CdA0 is not None and self.k_induced is not None:
+            return self.CdA0, self.k_induced
+        if self.ClA <= 0:
+            return self.CdA, (self.k_induced or 0.0)
+        if self.k_induced is not None:
+            return max(self.CdA - self.k_induced * self.ClA**2, 0.0), self.k_induced
+        if self.CdA0 is not None:
+            return self.CdA0, max(self.CdA - self.CdA0, 0.0) / self.ClA**2
+        induced = self.induced_share * self.CdA
+        return self.CdA - induced, induced / self.ClA**2
+
+    def cda_at(self, cla: float) -> float:
+        cd0, k = self.polar()
+        return cd0 + k * cla**2
+
+    def cla_bounds(self) -> tuple[float, float]:
+        lo = 0.0 if self.ClA_min is None else self.ClA_min
+        hi = 2.0 * self.ClA if self.ClA_max is None else self.ClA_max
+        return lo, max(hi, lo)
 
 
 @dataclass
@@ -256,3 +291,12 @@ def load_vehicle(path) -> Vehicle:
              "powertrain": lambda d: Powertrain(**d)}
     kwargs = {k: build[k](v) if k in build else v for k, v in data.items()}
     return Vehicle(**kwargs)
+
+
+def save_vehicle(veh: Vehicle, path) -> None:
+    d = veh.to_dict()
+    d["aero"].pop("wheelbase", None)
+    for dev in d["aero"]["devices"].values():
+        for k in [k for k, v in dev.items() if v is None]:
+            del dev[k]
+    Path(path).write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

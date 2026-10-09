@@ -4,6 +4,8 @@
     python -m lapsim delta    --dcl 10 --dcd 5                     # every aero device
     python -m lapsim delta    --dev rear:cl=10,cd=5 --dev front:cl=-5
     python -m lapsim coeffs                                        # total + per device
+    python -m lapsim forces   --speeds 40,60,80,100                # per-device downforce/drag [N]
+    python -m lapsim targets  --bal-range 45:49 --save cars/target.json
     python -m lapsim sweep    --cl=-20:20:5 --cd=-20:20:5   (use "=" for negative starts)
     python -m lapsim balance  --range 30:60:2.5
 """
@@ -15,10 +17,10 @@ from pathlib import Path
 
 import numpy as np
 
-from . import study
+from . import study, targets
 from .solver import simulate
 from .track import load_track
-from .vehicle import load_vehicle
+from .vehicle import load_vehicle, save_vehicle
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CAR = ROOT / "cars" / "fsk_ev_baseline.json"
@@ -63,7 +65,8 @@ def _describe(changes, bal):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="lapsim", description="QSS lap time simulator (FSK aero studies)")
-    ap.add_argument("command", choices=["run", "delta", "coeffs", "sweep", "balance"])
+    ap.add_argument("command", choices=["run", "delta", "coeffs", "sweep", "balance",
+                                                   "forces", "targets"])
     ap.add_argument("--car", default=DEFAULT_CAR)
     ap.add_argument("--track", default=DEFAULT_TRACK)
     ap.add_argument("--ds", type=float, default=0.5, help="track discretisation [m]")
@@ -76,7 +79,10 @@ def main(argv=None):
     ap.add_argument("--dev", action="append", metavar="NAME:cl=X,cd=Y",
                     help="delta: change one aero device [%%], repeatable, e.g. --dev rear:cl=10,cd=5")
     ap.add_argument("--device", action="append", metavar="NAME",
-                    help="sweep: only scale these devices (repeatable; default all)")
+                    help="sweep/targets: only vary these devices (repeatable; default all)")
+    ap.add_argument("--speeds", default="40,60,80,100", help="forces/targets: reference speeds [km/h]")
+    ap.add_argument("--bal-range", metavar="LO:HI", help="targets: allowed front balance window [%%]")
+    ap.add_argument("--save", metavar="JSON", help="targets: write the target car to this file")
     ap.add_argument("--bal", type=float, default=None, help="delta: new front aero balance [%%]")
     ap.add_argument("--cl", default="-20:20:5", help="sweep: ClA range a:b:step [%%]")
     ap.add_argument("--cd", default="-20:20:5", help="sweep: CdA range a:b:step [%%]")
@@ -148,6 +154,30 @@ def main(argv=None):
         if args.plot:
             from .plot import plot_balance
             plot_balance(bals, times, args.plot)
+
+    elif args.command == "forces":
+        res = simulate(veh, track, **kw)
+        speeds = [float(s) for s in args.speeds.split(",")]
+        print(f"lap time {res.lap_time:.3f} s — per-device aero loads "
+              "(DF = downforce, drag E = drag work per lap)")
+        print(targets.loads_table(targets.device_loads(veh, res, speeds), veh))
+
+    elif args.command == "targets":
+        bal = None
+        if args.bal_range:
+            lo, hi = (float(x) / 100 for x in args.bal_range.split(":"))
+            bal = (lo, hi)
+        print("optimising device ClA along each device polar (CdA = CdA0 + k*ClA^2) ...")
+        tr = targets.optimise_targets(veh, track, args.device, bal, **kw)
+        print(tr.summary())
+        speeds = [float(s) for s in args.speeds.split(",")]
+        print("\ntarget loads:")
+        print(targets.loads_table(targets.device_loads(tr.target, simulate(tr.target, track, **kw),
+                                                       speeds), tr.target))
+        if args.save:
+            tr.target.name = f"{veh.name} (aero targets)"
+            save_vehicle(tr.target, args.save)
+            print(f"\ntarget car saved to {args.save}")
 
     if args.plot:
         print(f"\nplot saved to {args.plot}")

@@ -161,3 +161,34 @@ def test_fsk_endurance_track():
     assert trk.length == pytest.approx(850.8, rel=0.01)
     turning = np.degrees(np.sum(trk.kappa) * trk.ds)
     assert turning == pytest.approx(-360, abs=5)        # meta.run = clockwise
+
+
+# --- aero targets --------------------------------------------------------------
+from lapsim.targets import device_loads, optimise_targets  # noqa: E402
+
+
+def test_device_polar_anchored_on_current_point(car):
+    d = car.aero.devices["rear"]
+    assert d.cda_at(d.ClA) == pytest.approx(d.CdA)
+    assert d.cda_at(2 * d.ClA) > 2 * d.CdA            # induced drag grows faster than ClA
+
+
+def test_device_loads_match_hand_calc(car, autocross):
+    res = simulate(car, autocross)
+    loads = {l.name: l for l in device_loads(car, res, speeds_kmh=(60,))}
+    q60 = 0.5 * car.aero.rho * (60 / 3.6) ** 2
+    assert loads["front"].at_speed[60][0] == pytest.approx(q60 * car.aero.devices["front"].ClA)
+    total_drag_e = sum(l.drag_energy for l in loads.values())
+    q = 0.5 * car.aero.rho * res.v**2
+    assert total_drag_e == pytest.approx(np.trapezoid(q, res.s) * car.aero.CdA, rel=1e-6)
+
+
+def test_targets_improve_lap_and_respect_limits(car, autocross):
+    tr = optimise_targets(car, autocross, balance_range=(0.45, 0.49), max_evals=120)
+    assert tr.target_time <= tr.base_time
+    assert 0.45 - 1e-3 <= tr.target.aero.balance_front <= 0.49 + 1e-3
+    for name in tr.devices:
+        d = tr.target.aero.devices[name]
+        assert d.ClA_min - 1e-9 <= d.ClA <= d.ClA_max + 1e-9
+        assert d.CdA == pytest.approx(d.cda_at(d.ClA))
+    assert tr.target.aero.devices["body"].ClA == 0.0       # non-lifting device untouched

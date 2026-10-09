@@ -13,6 +13,8 @@ python -m lapsim delta  --dev rear:cl=10 --bal 48             # 변경 후 밸�
 python -m lapsim coeffs                                       # 랩타임 계수: 전체 + 장치별
 python -m lapsim sweep  --cl=-20:20:5 --cd=-20:20:5 --device rear --plot sweep.png
 python -m lapsim balance --range 40:60:2.5                    # 공력 밸런스 스윕 (총 ClA 고정)
+python -m lapsim forces --speeds 40,60,80,100                 # 장치별 다운포스·드래그 [N], 드래그 에너지
+python -m lapsim targets --bal-range 45:49 --save cars/target.json   # 장치별 성능 목표치 자동 계산
 python -m lapsim run --set aero.rear.ClA=1.6 --set mass=270   # 파라미터 즉석 변경
 python -m lapsim run --track tracks/sample_autocross.json     # 합성 오토크로스 (정지 출발)
 ```
@@ -38,6 +40,7 @@ python -m lapsim run --track tracks/sample_autocross.json     # 합성 오토크
 * `x_cp` : 앞차축 기준 압력중심 위치 [m] (음수 = 앞차축 앞). 앞축 분담률 = 1 − x_cp/L.
   프론트 윙은 100 % 넘게, 리어 윙은 음수(앞축 하중을 뺌)가 되는 게 정상. 대신 `front_share` 로 직접 줘도 된다.
 * `h_cp` : 그 장치 드래그의 작용 높이 → 높은 리어 윙 드래그는 앞축 하중을 덜어내는 피칭 모멘트를 만든다.
+* (선택) `ClA_min`, `ClA_max`, `CdA0`, `k_induced`, `induced_share`, `mass_per_cla` — 목표치 계산용 설계 범위 (아래 참고).
 * 장치 이름은 자유 (`body` 는 공력 장치가 아닌 기본 드래그용). 옛 형식 `{"ClA", "CdA", "balance_front"}` 도 읽는다.
 * `balance` / `--bal` 재트림은 가장 앞·가장 뒤 장치의 ClA 를 (CdA 도 같은 비율로) 조절해 총 ClA 를 유지한 채 목표 밸런스를 맞춘다 (윙 각도 조정에 해당).
 
@@ -62,6 +65,32 @@ per device (absolute change on that device only; balance shifts with it):
 리어 윙은 ΔClA/ΔCdA > 1.58 이어야 이득 (리어 다운포스는 밸런스를 뒤로 보내고, 높은 드래그는 앞축 하중을 더 덜어냄).
 `balance` 스윕 최적점은 약 50 % F.
 
+## 공력 장치 성능 목표치 자동 계산 (`forces`, `targets`)
+**`forces`** — 현재 차량의 장치별 하중표: 기준 속도별 다운포스/드래그 [N], 랩 평균(시간 가중) 하중, 최대 다운포스,
+드래그가 한 랩에 먹는 에너지 [Wh/lap] (EV 엔듀런스 에너지 예산용).
+
+**`targets`** — 랩타임을 최소화하는 장치별 ClA 를 찾아 목표치를 낸다.
+* 각 장치는 자기 폴라 `CdA = CdA0 + k_induced·ClA²` 위에서 움직인다 → 다운포스를 늘리면 유도항력이 제곱으로 늘어남.
+  `CdA0`/`k_induced` 를 안 주면 현재 점을 지나고 드래그의 `induced_share`(기본 50 %)가 유도항력이라고 가정.
+* `ClA_min`/`ClA_max` = 패키징·규정 범위 (없으면 0 ~ 현재×2), `mass_per_cla` = ClA 1.0 당 구조물 질량 [kg].
+* `--bal-range 45:49` = 허용 공력 밸런스 창 (QSS 는 안정성 마진을 모르므로 지정 권장). `--device rear` 로 일부 장치만 최적화.
+* 탐색은 패턴 서치(무기울기, numpy만) — FSK 코스 기준 약 60~70 랩 계산, 수 초.
+* `--save` 로 목표 차량 JSON 저장 → `run/delta/coeffs --car` 로 바로 재사용.
+
+출력 (기본 차량, FSK 2026, 밸런스 45–49 %):
+```
+  device    ClA now  target      Δ  CdA now  target   L/D    F %  +0.1ClA  +0.1CdA  min L/D  note
+  front        1.20    1.80  +0.60     0.33    0.54  3.36  132.7    -64ms    +46ms     0.71  at ClA_max (package limit)
+  mid          1.05    1.60  +0.55     0.15    0.25  6.42   44.4    -50ms    +44ms     0.89  at ClA_max (package limit)
+  rear         1.40    1.99  +0.59     0.52    0.78  2.54  -24.2    -39ms    +53ms     1.35  at ClA_max (package limit)
+  total        3.65    5.39  +1.74     1.32    1.89  2.85   48.6
+  lap time       : 54.842 s -> 54.211 s (-630.3 ms)
+```
+* `target` ClA/CdA = 장치 설계 목표. 아래 하중표에 같은 목표를 속도별 다운포스/드래그 [N] 로 환산해 준다 (풍동·CFD 목표값으로 사용).
+* `+0.1ClA`/`+0.1CdA` = 목표점에서 그 장치의 한계 가치, `min L/D` = 그 장치를 더 바꿀 때 ΔClA/ΔCdA 가 넘어야 하는 값.
+* `note` 가 `at ClA_max` 면 패키징이 병목 (상한을 풀면 더 빨라짐), `optimum` 이면 내부 최적점, `set by balance window` 면 밸런스가 병목.
+* 기본 차량에서 리어만 최적화하면 현재 1.40 이 이미 최적 — 앞축 한계 차량이라 리어만 늘리면 밸런스가 뒤로 가서 손해.
+
 ## 모델
 | 항목 | 내용 |
 |---|---|
@@ -82,6 +111,7 @@ lapsim/vehicle.py   차량·타이어·공력 장치(AeroDevice)·EV 파워트�
 lapsim/track.py     트랙 JSON 로더 → 등간격 곡률 프로파일
 lapsim/solver.py    QSS 솔버 (simulate → LapResult)
 lapsim/study.py     modify / delta / sweep / balance_sweep / coefficients / device_coefficients
+lapsim/targets.py   장치별 하중표(device_loads) / 목표치 최적화(optimise_targets)
 lapsim/plot.py      속도 트레이스, 스윕 히트맵, 밸런스 곡선 (matplotlib)
 cars/fsk_ev_baseline.json   기본 FS EV (280 kg, front/mid/rear/body, ClA 3.65, CdA 1.32, 47 % F, 80 kW)
 tracks/fsk_2026_endurance.json  FSK 2026 엔듀런스 (cone2track export, 850.8 m, 시계방향)
