@@ -4,8 +4,8 @@ import math
 import numpy as np
 import pytest
 
-from lapsim import Vehicle, simulate
-from lapsim.study import coefficients
+from lapsim import Vehicle, load_vehicle, simulate
+from lapsim.study import coefficients, device_coefficients, modify
 from lapsim.track import load_track, track_from_dict
 from lapsim.vehicle import G
 
@@ -19,8 +19,8 @@ def circle(radius, n=400):
 
 
 def no_aero_car(**kw):
-    v = Vehicle().with_changes(**{"aero.ClA": 0.0, "aero.CdA": 0.0, "rolling_resistance": 0.0,
-                                  "tyre.load_sensitivity": 0.0})
+    v = Vehicle().scaled_aero(0.0, 0.0).with_changes(
+        **{"rolling_resistance": 0.0, "tyre.load_sensitivity": 0.0})
     return v.with_changes(**kw)
 
 
@@ -70,7 +70,7 @@ def test_downforce_helps_drag_hurts(autocross):
 
 def test_balance_has_interior_optimum(autocross):
     car = Vehicle()
-    times = [simulate(car.with_changes(**{"aero.balance_front": b}), autocross).lap_time
+    times = [simulate(car.with_balance(b), autocross).lap_time
              for b in (0.1, 0.48, 0.9)]
     assert times[1] < times[0] and times[1] < times[2]
 
@@ -103,3 +103,61 @@ def test_track_layouts(layout, tmp_path):
 def test_unknown_layout_raises():
     with pytest.raises(ValueError, match="unrecognised"):
         track_from_dict({"foo": []})
+
+
+# --- aero devices ------------------------------------------------------------
+@pytest.fixture(scope="module")
+def car():
+    return load_vehicle(ROOT / "cars" / "fsk_ev_baseline.json")
+
+
+def test_device_totals(car):
+    devs = car.aero.devices
+    assert set(devs) >= {"front", "mid", "rear"}
+    assert car.aero.ClA == pytest.approx(sum(d.ClA for d in devs.values()))
+    L = car.wheelbase
+    bal = sum(d.ClA * (1 - d.x_cp / L) for d in devs.values()) / car.aero.ClA
+    assert car.aero.balance_front == pytest.approx(bal)
+    assert devs["front"].share(L) > 1 and devs["rear"].share(L) < 0   # ahead of / behind axles
+
+
+def test_legacy_aero_format(tmp_path):
+    data = json.loads((ROOT / "cars" / "fsk_ev_baseline.json").read_text())
+    data["aero"] = {"ClA": 3.0, "CdA": 1.1, "balance_front": 0.42, "h_cp": 0.3, "rho": 1.2}
+    f = tmp_path / "c.json"
+    f.write_text(json.dumps(data))
+    v = load_vehicle(f)
+    assert (v.aero.ClA, v.aero.CdA, v.aero.balance_front) == pytest.approx((3.0, 1.1, 0.42))
+    assert v.with_balance(0.5).aero.balance_front == pytest.approx(0.5)
+
+
+def test_with_balance_keeps_total_downforce(car):
+    for b in (0.40, 0.55):
+        v = car.with_balance(b)
+        assert v.aero.balance_front == pytest.approx(b)
+        assert v.aero.ClA == pytest.approx(car.aero.ClA)
+    with pytest.raises(ValueError):
+        car.with_balance(1.5)
+
+
+def test_device_changes_move_balance(car):
+    rear_up = modify(car, {"rear": (0.2, 0.0)})
+    assert rear_up.aero.balance_front < car.aero.balance_front
+    assert rear_up.aero.devices["front"].ClA == car.aero.devices["front"].ClA
+    with pytest.raises(AttributeError):
+        car.with_changes(**{"aero.ClA": 4.0})
+    assert car.with_changes(**{"aero.rear.ClA": 2.0}).aero.devices["rear"].ClA == 2.0
+
+
+def test_device_coefficients_signs(car, autocross):
+    coeffs = {c.name: c for c in device_coefficients(car, autocross)}
+    assert all(c.dt_dcda > 0 for c in coeffs.values())
+    assert coeffs["front"].dt_dcla < 0
+
+
+def test_fsk_endurance_track():
+    trk = load_track(ROOT / "tracks" / "fsk_2026_endurance.json")
+    assert trk.closed
+    assert trk.length == pytest.approx(850.8, rel=0.01)
+    turning = np.degrees(np.sum(trk.kappa) * trk.ds)
+    assert turning == pytest.approx(-360, abs=5)        # meta.run = clockwise

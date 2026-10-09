@@ -3,15 +3,18 @@
 Supported JSON layouts (auto-detected):
 
 1. Centerline points      ``{"x": [...], "y": [...]}`` or ``{"centerline": [[x, y], ...]}``
+                          or a cone2track export ``{"centerline": {"closed":, "points": [{x, y}]}}``
 2. Cones                  ``{"left": [[x, y], ...], "right": [[x, y], ...]}``
-                          (``blue``/``yellow`` or ``inner``/``outer`` also accepted)
+                          (``blue``/``yellow`` or ``inner``/``outer`` also accepted), or
+                          ``{"cones": [{"side": "left", "lat":, "lng":}, ...]}``
 3. Segments               ``{"segments": [{"type": "straight", "length": 50},
                                           {"type": "corner", "radius": 9, "angle": 180,
                                            "direction": "left"}, ...]}``
 4. Distance / curvature   ``{"s": [...], "curvature": [...]}``
 
 Optional keys: ``"closed"`` (bool, default True for point/cone layouts, False for
-segments and curvature), ``"name"``.  Points may be ``[x, y]`` pairs or ``{"x":, "y":}`` dicts.
+segments and curvature), ``"name"``, driving direction ``"direction"`` /
+``"meta": {"run": "clockwise"}`` or ``"reverse": true``.  Points may be ``[x, y]`` pairs or ``{"x":, "y":}`` dicts.
 """
 
 from __future__ import annotations
@@ -48,6 +51,40 @@ class Track:
 def _points(raw) -> np.ndarray:
     pts = [(p["x"], p["y"]) if isinstance(p, dict) else (p[0], p[1]) for p in raw]
     return np.asarray(pts, dtype=float)
+
+
+def _side_cones(data):
+    """Split a ``"cones": [{"side": "left", "x"/"y" or "lat"/"lng"}, ...]`` list."""
+    cones = data["cones"]
+    if all("x" in c for c in cones):
+        xy = np.array([[c["x"], c["y"]] for c in cones], dtype=float)
+    else:                                   # local equirectangular projection
+        proj = data.get("projection", {})
+        lat = np.array([c["lat"] for c in cones], dtype=float)
+        lng = np.array([c["lng"] for c in cones], dtype=float)
+        lat0, lng0 = proj.get("lat0", lat.mean()), proj.get("lng0", lng.mean())
+        mlat = proj.get("mlat", 110_540.0)
+        mlng = proj.get("mlng", 111_320.0 * np.cos(np.radians(lat0)))
+        xy = np.column_stack([(lng - lng0) * mlng, (lat - lat0) * mlat])
+    side = np.array([str(c.get("side", "")).lower() for c in cones])
+    return xy[side == "left"], xy[side == "right"]
+
+
+def _orient(pts, data, closed):
+    """Honour the driving direction of a closed loop.
+
+    ``"direction"`` / ``"meta": {"run": ...}`` = "clockwise" | "counterclockwise", or an
+    explicit ``"reverse": true``.  Coordinates are x east, y north.
+    """
+    if data.get("reverse") is True:
+        return pts[::-1]
+    run = str(data.get("direction") or data.get("meta", {}).get("run", "")).lower()
+    if not closed or run not in ("clockwise", "cw", "counterclockwise", "anticlockwise", "ccw"):
+        return pts
+    x, y = pts[:, 0], pts[:, 1]
+    ccw = 0.5 * np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y) > 0
+    want_ccw = run not in ("clockwise", "cw")
+    return pts if ccw == want_ccw else pts[::-1]
 
 
 def _cones_to_centerline(left: np.ndarray, right: np.ndarray) -> np.ndarray:
@@ -138,10 +175,17 @@ def track_from_dict(data: dict, ds: float = 0.5, smooth_m: float = 4.0, name: st
         x, y = _integrate_xy(s, kappa)
         return Track(name, s, kappa, x, y, closed)
 
+    closed = data.get("closed")
     if "x" in keys and "y" in keys:
         pts = np.column_stack([np.asarray(data["x"], float), np.asarray(data["y"], float)])
+    elif "centerline" in keys and isinstance(data["centerline"], dict):   # cone2track export
+        cl = data["centerline"]
+        pts = _points(cl["points"])
+        closed = cl.get("closed", closed)
     elif "centerline" in keys:
         pts = _points(data["centerline"])
+    elif "cones" in keys:                                               # raw surveyed cones
+        pts = _cones_to_centerline(*_side_cones(data))
     else:
         for l, r in pairs:
             if l in keys and r in keys:
@@ -152,7 +196,8 @@ def track_from_dict(data: dict, ds: float = 0.5, smooth_m: float = 4.0, name: st
                 "unrecognised track JSON; expected one of x/y, centerline, left/right cones, "
                 f"segments or s/curvature. Found keys: {sorted(keys)}")
 
-    closed = bool(data.get("closed", True))
+    closed = True if closed is None else bool(closed)
+    pts = _orient(pts, data, closed)
     s, x, y = _resample_xy(pts, ds, closed)
     ds = s[1] - s[0]
     win = max(int(round(smooth_m / ds)), 1) | 1          # odd window
