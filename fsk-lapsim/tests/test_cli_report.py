@@ -154,7 +154,7 @@ def test_vehicle_option_with_edited_config(tmp_path):
 
 @pytest.mark.slow
 def test_report_quick(tmp_path):
-    data = build_report_data(ReportOptions(quick=True))
+    data = build_report_data(ReportOptions(quick=True, montecarlo_samples=2, workers=2))
     html = render_html(data)
     assert html.startswith("<!doctype html>")
     for text in (
@@ -165,9 +165,31 @@ def test_report_quick(tmp_path):
         "모델 한계",
         "data:image/png;base64,",
         "가정 목록",
+        "발열",
+        "자리표시자 점수",
+        "몬테카를로",
     ):
-        assert text in html
-    assert html.count("<img") >= 12
+        assert text in html, text
+    for sec in (
+        "summary",
+        "vehicle",
+        "ggv",
+        "sens",
+        "priority",
+        "sweep",
+        "wing",
+        "balance",
+        "drs",
+        "energy",
+        "thermal",
+        "reference",
+        "score",
+        "montecarlo",
+        "assumptions",
+        "limits",
+    ):
+        assert f'<section id="{sec}">' in html, sec
+    assert html.count("<img") >= 16
     out = _ok(["report", "--quick", "--out", str(tmp_path / "r.html")])
     assert (tmp_path / "r.html").stat().st_size > 100_000 and "saved" in out
 

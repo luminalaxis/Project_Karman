@@ -193,6 +193,7 @@ def build_report_data(
         drs,
         collect_assumptions(opts),
         ref_lap,
+        extras,
     )
     return data
 
@@ -294,10 +295,17 @@ def render_html(d: ReportData) -> str:
         ("balance", "공력 밸런스"),
         ("drs", "능동 공력 (DRS)"),
         ("energy", "에너지·모터 운전점"),
+        ("thermal", "발열 (E3)"),
         ("reference", "참고: FSK 2026 중심선"),
+        ("score", "점수 환산 (E4)"),
+        ("montecarlo", "몬테카를로 (E1)"),
         ("assumptions", "가정 목록"),
         ("limits", "모델 한계"),
     ]
+    if "mc" not in d.extras:
+        toc = [t for t in toc if t[0] != "montecarlo"]
+    if d.reference_lap is None:
+        toc = [t for t in toc if t[0] != "reference"]
     parts.append(
         "<nav><ol>" + "".join(f'<li><a href="#{a}">{t}</a></li>' for a, t in toc) + "</ol></nav>"
     )
@@ -521,6 +529,7 @@ def render_html(d: ReportData) -> str:
             _tbl(en) + _img(plots.motor_map(fl, veh), "motor map"),
         )
     )
+    parts.append(_thermal_section(d))
 
     # -- reference
     if d.reference_lap is not None:
@@ -608,7 +617,7 @@ def _score_section(d: ReportData) -> str:
         + "</h3>"
         + _tbl(cp, "{:+.3f}")
     )
-    return _section("score", "11c. 점수 환산 (E4, 자리표시자)", body)
+    return _section("score", "11b. 점수 환산 (E4, 자리표시자)", body)
 
 
 def _mc_section(d: ReportData) -> str:
@@ -645,7 +654,7 @@ def _mc_section(d: ReportData) -> str:
                 + _tbl(mc.pairwise_flip(metric).head(10), "{:.3f}")
             )
         body += _img(plots.rank_probability(mc.rank_stats("autocross"), "autocross"), "mc rank")
-    return _section("montecarlo", "11b. 몬테카를로 불확실성 (E1)", body)
+    return _section("montecarlo", "11c. 몬테카를로 불확실성 (E1)", body)
 
 
 LIMITS_HTML = """<ul>

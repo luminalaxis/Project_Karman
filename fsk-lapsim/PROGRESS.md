@@ -155,6 +155,11 @@ ruff check src tests
 - ax_ref 고유 속도 메모이제이션, 단일 축 경량 판정, 이분법 44 회, `parallel.pmap` (스윕·민감도·비교·리포트, `--workers`).
 - 측정: GGV 0.20 → 0.155 s, 25 점 스윕 7.8 → 0.75 s (4 워커), 민감도 8.1 → 2.2 s, 리포트 51 → 18 s. 직렬과 결과 동일 (D-22).
 
+### 마무리
+- 리포트 검증 강화: 섹션 id 16 개 전부 존재를 테스트 (발열·몬테카를로 섹션이 누락돼 있던 연결 버그를 이 단계에서 발견·수정 —
+  `ReportData.extras` 미전달, 발열 섹션 미추가, 테스트 문자열 패치가 포맷 변경으로 적용 안 됐던 것).
+- FINAL_SUMMARY 최종판, `out/report.html` (몬테카를로 100 샘플 포함) 생성, zip.
+
 ## 다음 할 일
-- FINAL_SUMMARY 갱신 (확장 결과), 깨끗한 venv 재검증, zip 생성·전달.
+- 모든 Phase·확장 완료. 남은 일은 사용자 측 실측값 반영 (FINAL_SUMMARY 6절).
 - 모두 끝나면 FINAL_SUMMARY 갱신, zip 생성 (`fsk-lapsim/` 만, .venv/out 제외), 사용자에게 전달.
