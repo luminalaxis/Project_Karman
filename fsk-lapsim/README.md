@@ -136,6 +136,16 @@ fsk-lapsim thermal --plot heat.png --map-plot motor_eff.png      # 계수: confi
 부품별 열용량·열저항 집중 모델로 온도를 적분한다. 출력: 총 발열 [kJ], 평균/최대 발열률 [kW], 종료·최고 온도, 정상상태 온도,
 한계 온도를 지키는 데 필요한 열저항 (`required_r_k_per_w` < `assumed_r_k_per_w` 이면 냉각 강화 필요), 모터 효율 맵.
 
+### E4 점수 환산 (`fsk-lapsim score`)
+```bash
+fsk-lapsim score                       # 기준 차량 이벤트 점수, 0.1 s 당 점수
+fsk-lapsim score --with-candidates     # 리어윙 후보 점수 차이 (DUMMY)
+```
+`configs/scoring.yaml` 은 **자리표시자**: FS 계열 시간 비율 공식 score = a·((T_max/T)^p − 1)/((T_max/T_min)^p − 1) + b
+(T_max = 계수 × T_min) 과 효율 계수 공식의 형태만 따랐고, 기준 기록 T_min 은 기준 차량 시뮬레이션 시간 × 비율이다.
+FSK 규정 공식·만점·실제 우승 기록 (`t_min_s`) 으로 교체하면 시간 차이 → 점수 차이를 바로 읽을 수 있다. 리포트 11c 절에
+민감도 (표시 단위당 점수)·후보 점수 차이가 들어간다.
+
 ## 결과 읽는 법
 - **민감도 표**: "표시 단위만큼 늘렸을 때 몇 초" (양수 = 느려짐). 엔듀런스는 총 시간.
 - **등가 환산**: "+1 kg 과 같은 오토크로스 시간 손실을 내는 ClA/CdA 변화" — 무게와 공력의 교환 비율.

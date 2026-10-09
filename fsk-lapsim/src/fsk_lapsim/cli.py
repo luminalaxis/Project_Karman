@@ -501,6 +501,47 @@ def thermal(
 
 
 @app.command()
+def score(
+    vehicle: VehicleOpt = None,
+    events: EventsOpt = None,
+    model: ModelOpt = "axle",
+    scoring: Annotated[str | None, typer.Option(help="scoring.yaml")] = None,
+    candidates: Annotated[str | None, typer.Option(help="also score rear-wing candidates")] = None,
+    with_candidates: Annotated[
+        bool, typer.Option(help="score the default DUMMY candidates")
+    ] = False,
+) -> None:
+    """Convert event times (and differences) into points (PLACEHOLDER formulas, E4)."""
+    from .scoring import ScoringModel, comparison_points
+
+    veh, setup, opt = _ctx(vehicle, events, model, None)
+    sm = ScoringModel.load(scoring)
+    if sm.placeholder:
+        typer.echo("*** PLACEHOLDER scoring formulas/reference times — replace with FSK rules ***")
+    base = run_events(veh, setup, opt)
+    cal = sm.calibrate(base)
+    typer.echo(cal.table(base).round(3).to_string(index=False))
+    if candidates or with_candidates:
+        from .aero import components_from_config
+        from .analysis.compare import compare_candidates
+        from .config import load_aero_components_config
+        from .wing import read_wing_candidates
+
+        path = (
+            resolve_path(candidates)
+            if candidates
+            else (default_data_dir() / "rear_wing_candidates_DUMMY.csv")
+        )
+        cands = read_wing_candidates(path)
+        comps = components_from_config(load_aero_components_config())
+        cmp = compare_candidates(veh, comps, cands, setup, opt)
+        if cmp.dummy:
+            typer.echo("*** DUMMY candidate data ***")
+        typer.echo(f"\npoints vs {cmp.reference}:")
+        typer.echo(comparison_points(sm, cmp.table, cmp.reference).round(3).to_string(index=False))
+
+
+@app.command()
 def assumptions(
     vehicle: VehicleOpt = None,
     events: EventsOpt = None,

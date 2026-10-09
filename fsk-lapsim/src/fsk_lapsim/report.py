@@ -533,6 +533,7 @@ def render_html(d: ReportData) -> str:
             body += _img(plots.track_map(tr, rl), "fsk map")
         parts.append(_section("reference", "11. 참고: FSK 2026 엔듀런스 중심선", body))
 
+    parts.append(_score_section(d))
     if "mc" in d.extras:
         parts.append(_mc_section(d))
     for hook in EXTRA_SECTIONS:
@@ -583,6 +584,28 @@ def _thermal_section(d: ReportData) -> str:
         )
     )
     return _section("thermal", "10b. 모터·인버터·어큐뮬레이터 발열 (E3, 가정값)", body)
+
+
+def _score_section(d: ReportData) -> str:
+    from .scoring import ScoringModel, comparison_points, sensitivity_points
+
+    sm = ScoringModel.load()
+    cal = sm.calibrate(d.events)
+    sp = sensitivity_points(cal, d.sens.table, d.events)
+    cp = comparison_points(sm, d.comparison.table, d.comparison.reference)
+    body = (
+        '<div class="box"><b>자리표시자 점수 공식</b> (configs/scoring.yaml) — FS 계열 공식 형태와 '
+        "기준 기록 (기준 차량 시간 × 비율) 을 임의로 둔 것. FSK 규정 공식으로 교체 전에는 "
+        "점수 절대값이 아니라 설계안 간 점수 차이의 크기 감각으로만 쓸 것.</div>"
+        + _tbl(cal.table(d.events), "{:.3f}")
+        + "<h3>민감도 (표시 단위당 점수 변화, 선형화)</h3>"
+        + _tbl(sp, "{:+.3f}")
+        + f"<h3>리어윙 후보 점수 차이 (기준 {html.escape(d.comparison.reference)})"
+        + (" — DUMMY" if d.comparison.dummy else "")
+        + "</h3>"
+        + _tbl(cp, "{:+.3f}")
+    )
+    return _section("score", "11c. 점수 환산 (E4, 자리표시자)", body)
 
 
 def _mc_section(d: ReportData) -> str:

@@ -232,3 +232,8 @@ def test_thermal_command(tmp_path):
     out = _ok(["thermal", "--plot", str(tmp_path / "t.png"), "--map-plot", str(tmp_path / "m.png")])
     assert "required_r_k_per_w" in out and "implied motor+inverter efficiency" in out
     assert (tmp_path / "t.png").exists() and (tmp_path / "m.png").exists()
+
+
+def test_score_command():
+    out = _ok(["score", "--with-candidates"])
+    assert "PLACEHOLDER" in out and "points vs RW01" in out and "d_total_pts" in out
