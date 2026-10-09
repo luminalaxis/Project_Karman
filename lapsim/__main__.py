@@ -1,6 +1,7 @@
 """Command line interface.
 
     python -m lapsim run      --track tracks/sample_autocross.json
+    python -m lapsim run      --line mincurv --plot lap.png --export lap.csv
     python -m lapsim delta    --dcl 10 --dcd 5                     # every aero device
     python -m lapsim delta    --dev rear:cl=10,cd=5 --dev front:cl=-5
     python -m lapsim coeffs                                        # total + per device
@@ -18,6 +19,8 @@ from pathlib import Path
 import numpy as np
 
 from . import study, targets
+from .channels import channels, export_csv
+from .line import best_line, racing_line
 from .solver import simulate
 from .track import load_track
 from .vehicle import load_vehicle, save_vehicle
@@ -88,10 +91,26 @@ def main(argv=None):
     ap.add_argument("--cd", default="-20:20:5", help="sweep: CdA range a:b:step [%%]")
     ap.add_argument("--range", default="30:60:2.5", help="balance: front balance range [%%]")
     ap.add_argument("--plot", metavar="PNG", help="save a plot")
+    ap.add_argument("--export", metavar="CSV", help="run/delta: write all lap channels to CSV")
+    ap.add_argument("--line", choices=["center", "mincurv", "compromise", "best"], default="center",
+                    help="driven path: centerline, minimum-curvature line, curvature/length "
+                         "compromise line, or best = whichever of the two lines is faster")
+    ap.add_argument("--car-width", type=float, default=1.45, help="racing line: car width [m]")
+    ap.add_argument("--line-margin", type=float, default=0.25, help="racing line: margin to limits [m]")
+    ap.add_argument("--track-width", type=float, default=None,
+                    help="racing line: track width [m] when the track file has none")
     args = ap.parse_args(argv)
 
     veh = _set_overrides(load_vehicle(args.car), args.set)
     track = load_track(args.track, ds=args.ds, smooth_m=args.smooth)
+    limits = track
+    if args.line == "best":
+        track, times = best_line(veh, track, args.car_width, args.line_margin,
+                                 default_width=args.track_width, smooth_m=args.smooth)
+        print("racing lines: " + ", ".join(f"{m} {t:.3f} s" for m, t in times.items()))
+    elif args.line != "center":
+        track = racing_line(track, args.line, args.car_width, args.line_margin,
+                            default_width=args.track_width, smooth_m=args.smooth)
     kw = {"v_start": 1e3} if args.flying else {}
     print(f"car   : {veh.name}  (m {veh.mass:.0f} kg)")
     print(veh.aero.table())
@@ -102,7 +121,10 @@ def main(argv=None):
         print(res.summary())
         if args.plot:
             from .plot import plot_lap
-            plot_lap({"baseline": res}, track, args.plot)
+            plot_lap({"baseline": (veh, res)}, args.plot, limits)
+        if args.export:
+            export_csv(channels(veh, res), args.export)
+            print(f"\nchannels written to {args.export}")
 
     elif args.command == "delta":
         bal = None if args.bal is None else args.bal / 100
@@ -120,7 +142,10 @@ def main(argv=None):
         print(f"delta     : {d * 1e3:+.1f} ms  ({'faster' if d < 0 else 'slower'})")
         if args.plot:
             from .plot import plot_lap
-            plot_lap({"baseline": base, "modified": new}, track, args.plot)
+            plot_lap({"baseline": (veh, base), "modified": (mod, new)}, args.plot, limits)
+        if args.export:
+            export_csv(channels(mod, new), args.export)
+            print(f"\nmodified-car channels written to {args.export}")
 
     elif args.command == "coeffs":
         print(study.coefficients(veh, track, **kw).summary(veh))

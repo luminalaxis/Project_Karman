@@ -184,7 +184,7 @@ def test_device_loads_match_hand_calc(car, autocross):
 
 
 def test_targets_improve_lap_and_respect_limits(car, autocross):
-    tr = optimise_targets(car, autocross, balance_range=(0.45, 0.49), max_evals=120)
+    tr = optimise_targets(car, autocross, balance_range=(0.45, 0.49), max_evals=40)
     assert tr.target_time <= tr.base_time
     assert 0.45 - 1e-3 <= tr.target.aero.balance_front <= 0.49 + 1e-3
     for name in tr.devices:

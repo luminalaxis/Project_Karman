@@ -12,6 +12,9 @@ Supported JSON layouts (auto-detected):
                                            "direction": "left"}, ...]}``
 4. Distance / curvature   ``{"s": [...], "curvature": [...]}``
 
+Track width (for the racing line): per-point ``widthL``/``widthR`` (cone2track), ``width_left`` /
+``width_right`` lists for the x/y layout, distances to the cones, or a scalar ``"width"``.
+
 Optional keys: ``"closed"`` (bool, default True for point/cone layouts, False for
 segments and curvature), ``"name"``, driving direction ``"direction"`` /
 ``"meta": {"run": "clockwise"}`` or ``"reverse": true``.  Points may be ``[x, y]`` pairs or ``{"x":, "y":}`` dicts.
@@ -36,6 +39,8 @@ class Track:
     x: np.ndarray
     y: np.ndarray
     closed: bool
+    width_left: np.ndarray | None = None   # usable width left of the path [m]
+    width_right: np.ndarray | None = None  # usable width right of the path [m]
 
     @property
     def ds(self) -> float:
@@ -45,6 +50,23 @@ class Track:
     def length(self) -> float:
         """Driven length; for a closed track this includes the segment back to the start."""
         return float(self.s[-1] + (self.ds if self.closed else 0.0))
+
+    def normals(self):
+        """Left-pointing unit normals of the path."""
+        if self.closed:
+            tx, ty = np.roll(self.x, -1) - np.roll(self.x, 1), np.roll(self.y, -1) - np.roll(self.y, 1)
+        else:
+            tx, ty = np.gradient(self.x), np.gradient(self.y)
+        n = np.hypot(tx, ty)
+        return -ty / n, tx / n
+
+    def edges(self):
+        """((x_left, y_left), (x_right, y_right)) track limits, or None without width data."""
+        if self.width_left is None or self.width_right is None:
+            return None
+        nx, ny = self.normals()
+        return ((self.x + nx * self.width_left, self.y + ny * self.width_left),
+                (self.x - nx * self.width_right, self.y - ny * self.width_right))
 
 
 # ---------------------------------------------------------------------------
@@ -70,21 +92,21 @@ def _side_cones(data):
     return xy[side == "left"], xy[side == "right"]
 
 
-def _orient(pts, data, closed):
-    """Honour the driving direction of a closed loop.
+def _needs_reverse(pts, data, closed) -> bool:
+    """Whether the point order must be reversed to honour the driving direction.
 
     ``"direction"`` / ``"meta": {"run": ...}`` = "clockwise" | "counterclockwise", or an
     explicit ``"reverse": true``.  Coordinates are x east, y north.
     """
     if data.get("reverse") is True:
-        return pts[::-1]
+        return True
     run = str(data.get("direction") or data.get("meta", {}).get("run", "")).lower()
     if not closed or run not in ("clockwise", "cw", "counterclockwise", "anticlockwise", "ccw"):
-        return pts
+        return False
     x, y = pts[:, 0], pts[:, 1]
     ccw = 0.5 * np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y) > 0
     want_ccw = run not in ("clockwise", "cw")
-    return pts if ccw == want_ccw else pts[::-1]
+    return ccw != want_ccw
 
 
 def _cones_to_centerline(left: np.ndarray, right: np.ndarray) -> np.ndarray:
@@ -121,7 +143,7 @@ def _integrate_xy(s, kappa):
     return x, y
 
 
-def _smooth(v, window, closed):
+def smooth(v, window, closed):
     if window <= 1:
         return v
     kernel = np.ones(window) / window
@@ -130,18 +152,33 @@ def _smooth(v, window, closed):
     return np.convolve(vp, kernel, mode="same")[pad:pad + len(v)]
 
 
-def _resample_xy(pts, ds, closed):
-    if closed and np.linalg.norm(pts[0] - pts[-1]) > 1e-6:
-        pts = np.vstack([pts, pts[:1]])
-    seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
-    keep = np.concatenate([[True], seg > 1e-9])          # drop duplicate points
-    pts = pts[keep]
-    s_raw = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))])
+def _resample(cols, ds, closed):
+    """Resample columns [x, y, ...] uniformly in arc length (x, y define the arc length)."""
+    if closed and np.linalg.norm(cols[0, :2] - cols[-1, :2]) > 1e-6:
+        cols = np.vstack([cols, cols[:1]])
+    seg = np.linalg.norm(np.diff(cols[:, :2], axis=0), axis=1)
+    cols = cols[np.concatenate([[True], seg > 1e-9])]     # drop duplicate points
+    s_raw = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(cols[:, :2], axis=0), axis=1))])
     total = s_raw[-1]
     n = int(round(total / ds))
     ds = total / n                                        # exact spacing that closes the loop
     s = np.arange(n + (0 if closed else 1)) * ds
-    return s, np.interp(s, s_raw, pts[:, 0]), np.interp(s, s_raw, pts[:, 1])
+    return s, [np.interp(s, s_raw, cols[:, j]) for j in range(cols.shape[1])]
+
+
+def _point_widths(raw):
+    """(left, right) widths from cone2track-style point dicts, else None."""
+    if raw and isinstance(raw[0], dict) and "widthL" in raw[0] and "widthR" in raw[0]:
+        return (np.array([p["widthL"] for p in raw], float), np.array([p["widthR"] for p in raw], float))
+    return None
+
+
+def _cone_widths(x, y, left, right):
+    """Distance from each path point to the nearest left / right cone."""
+    p = np.column_stack([x, y])
+    wl = np.min(np.linalg.norm(p[:, None, :] - left[None, :, :], axis=2), axis=1)
+    wr = np.min(np.linalg.norm(p[:, None, :] - right[None, :, :], axis=2), axis=1)
+    return wl, wr
 
 
 def _curvature_xy(x, y, ds, closed):
@@ -173,23 +210,31 @@ def track_from_dict(data: dict, ds: float = 0.5, smooth_m: float = 4.0, name: st
             kappa = np.interp(s, s_raw - s_raw[0], k_raw)
         kappa = np.clip(kappa, -1 / MIN_RADIUS, 1 / MIN_RADIUS)
         x, y = _integrate_xy(s, kappa)
-        return Track(name, s, kappa, x, y, closed)
+        w = np.full(len(s), float(data["width"]) / 2) if "width" in keys else None
+        return Track(name, s, kappa, x, y, closed, w, w)
 
     closed = data.get("closed")
+    widths, cones = None, None
     if "x" in keys and "y" in keys:
         pts = np.column_stack([np.asarray(data["x"], float), np.asarray(data["y"], float)])
+        if "width_left" in keys and "width_right" in keys:
+            widths = (np.asarray(data["width_left"], float), np.asarray(data["width_right"], float))
     elif "centerline" in keys and isinstance(data["centerline"], dict):   # cone2track export
         cl = data["centerline"]
         pts = _points(cl["points"])
+        widths = _point_widths(cl["points"])
         closed = cl.get("closed", closed)
     elif "centerline" in keys:
         pts = _points(data["centerline"])
+        widths = _point_widths(data["centerline"])
     elif "cones" in keys:                                               # raw surveyed cones
-        pts = _cones_to_centerline(*_side_cones(data))
+        cones = _side_cones(data)
+        pts = _cones_to_centerline(*cones)
     else:
         for l, r in pairs:
             if l in keys and r in keys:
-                pts = _cones_to_centerline(_points(data[l]), _points(data[r]))
+                cones = (_points(data[l]), _points(data[r]))
+                pts = _cones_to_centerline(*cones)
                 break
         else:
             raise ValueError(
@@ -197,14 +242,29 @@ def track_from_dict(data: dict, ds: float = 0.5, smooth_m: float = 4.0, name: st
                 f"segments or s/curvature. Found keys: {sorted(keys)}")
 
     closed = True if closed is None else bool(closed)
-    pts = _orient(pts, data, closed)
-    s, x, y = _resample_xy(pts, ds, closed)
+    cols = pts if widths is None else np.column_stack([pts, widths[0], widths[1]])
+    if _needs_reverse(pts, data, closed):
+        cols = cols[::-1]
+        if widths is not None:                       # left/right swap with the direction
+            cols = cols[:, [0, 1, 3, 2]]
+        if cones is not None:
+            cones = (cones[1], cones[0])
+    s, res = _resample(cols, ds, closed)
+    x, y = res[0], res[1]
     ds = s[1] - s[0]
     win = max(int(round(smooth_m / ds)), 1) | 1          # odd window
-    x, y = _smooth(x, win, closed), _smooth(y, win, closed)
-    kappa = _smooth(_curvature_xy(x, y, ds, closed), win, closed)
+    x, y = smooth(x, win, closed), smooth(y, win, closed)
+    kappa = smooth(_curvature_xy(x, y, ds, closed), win, closed)
     kappa = np.clip(kappa, -1 / MIN_RADIUS, 1 / MIN_RADIUS)
-    return Track(name, s, kappa, x, y, closed)
+    if widths is not None:
+        wl, wr = res[2], res[3]
+    elif cones is not None:
+        wl, wr = _cone_widths(x, y, *cones)
+    elif "width" in keys:
+        wl = wr = np.full(len(s), float(data["width"]) / 2)
+    else:
+        wl = wr = None
+    return Track(name, s, kappa, x, y, closed, wl, wr)
 
 
 def load_track(path, ds: float = 0.5, smooth_m: float = 4.0) -> Track:

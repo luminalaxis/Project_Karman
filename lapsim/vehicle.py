@@ -28,11 +28,6 @@ class Tyre:
     load_sensitivity: float = 0.10  # fractional mu drop per +100% wheel load over Fz0
     Fz0: float = 700.0          # reference wheel load [N]
 
-    def mu_scale(self, fz_wheel):
-        """Load-sensitivity factor: mu(Fz) = mu0 * mu_scale(Fz)."""
-        s = 1.0 - self.load_sensitivity * (np.asarray(fz_wheel) - self.Fz0) / self.Fz0
-        return np.clip(s, 0.2, None)
-
 
 @dataclass
 class AeroDevice:
@@ -54,6 +49,12 @@ class AeroDevice:
     k_induced: float | None = None  # CdA = CdA0 + k_induced * ClA^2
     induced_share: float = 0.5     # used to derive CdA0/k_induced when they are not given
     mass_per_cla: float = 0.0      # device mass change per unit ClA change [kg]
+    # ride-height aero map (optional): relative change of ClA / CdA as a polynomial in the
+    # front/rear ride-height change dhf, dhr [mm] from ``rh_ref`` (default: static ride heights)
+    #   factor = 1 + c[0]*dhf + c[1]*dhr + c[2]*dhf^2 + c[3]*dhr^2 + c[4]*dhf*dhr
+    rh_cl: list | None = None
+    rh_cd: list | None = None
+    rh_ref: list | None = None     # [front, rear] ride height of the map reference [mm]
 
     def share(self, wheelbase: float) -> float:
         if self.front_share is not None:
@@ -156,13 +157,32 @@ class Powertrain:
         """Road speed at the motor rpm limit [m/s]."""
         return self.max_rpm * 2 * np.pi / 60 * self.wheel_radius / self.gear_ratio
 
-    def drive_force(self, v):
-        """Maximum tractive force at the wheels [N] (torque & power limited)."""
-        v = np.asarray(v, dtype=float)
-        f_torque = self.max_torque * self.gear_ratio * self.efficiency / self.wheel_radius
-        f_power = self.max_power * self.efficiency / np.maximum(v, 0.1)
-        f = np.minimum(f_torque, f_power)
-        return np.where(v >= self.v_max, 0.0, f)
+
+@dataclass
+class Suspension:
+    """Lateral load transfer and ride height.
+
+    * Lateral load transfer: per-wheel  dFz_axle = LLTD_axle * m * a_y * h / track_axle, where the
+      front share LLTD comes from ``roll_stiffness_front/rear`` [Nm/deg] or directly ``lltd_front``.
+    * Ride height: axle heave rate [N/mm] (wheel rate x 2, at the axle) lowers the static ride
+      height under aero load and longitudinal transfer; 0 = rigid (ride height stays static).
+    """
+    track_front: float = 1.22          # [m]
+    track_rear: float = 1.18           # [m]
+    lltd_front: float | None = None    # front share of lateral load transfer (0..1)
+    roll_stiffness_front: float | None = None   # [Nm/deg]
+    roll_stiffness_rear: float | None = None    # [Nm/deg]
+    ride_height_front: float = 30.0    # static [mm]
+    ride_height_rear: float = 35.0     # static [mm]
+    heave_rate_front: float = 0.0      # [N/mm] at the axle, 0 = rigid
+    heave_rate_rear: float = 0.0       # [N/mm]
+    min_ride_height: float = 8.0       # bump stop / plank [mm]
+
+    @property
+    def lltd(self) -> float:
+        if self.roll_stiffness_front is not None and self.roll_stiffness_rear is not None:
+            return self.roll_stiffness_front / (self.roll_stiffness_front + self.roll_stiffness_rear)
+        return 0.5 if self.lltd_front is None else self.lltd_front
 
 
 @dataclass
@@ -176,41 +196,11 @@ class Vehicle:
     tyre: Tyre = field(default_factory=Tyre)
     aero: Aero = field(default_factory=Aero)
     powertrain: Powertrain = field(default_factory=Powertrain)
+    suspension: Suspension | None = None   # None = no lateral load transfer, rigid ride height
+    yaw_inertia: float = 0.0               # Iz [kg m^2]; 0 = no yaw-acceleration demand
 
     def __post_init__(self):
         self.aero.wheelbase = self.wheelbase
-
-    # ---- aero -------------------------------------------------------------
-    def q(self, v):
-        return 0.5 * self.aero.rho * np.asarray(v, dtype=float) ** 2
-
-    def downforce(self, v):
-        return self.q(v) * self.aero.ClA
-
-    def drag(self, v):
-        return self.q(v) * self.aero.CdA
-
-    def resistance(self, v, fz_total):
-        """Drag + rolling resistance [N]."""
-        return self.drag(v) + self.rolling_resistance * fz_total
-
-    # ---- loads ------------------------------------------------------------
-    def axle_loads(self, v, a_x=0.0):
-        """Front/rear axle vertical loads [N] including aero and longitudinal transfer."""
-        m, L = self.mass, self.wheelbase
-        df = self.downforce(v)
-        fz_f = m * G * self.weight_dist_front + self.aero.balance_front * df
-        fz_r = m * G * (1 - self.weight_dist_front) + (1 - self.aero.balance_front) * df
-        # longitudinal load transfer from inertia and the drag pitching moment
-        dfz = (m * np.asarray(a_x) * self.cg_height + self.drag(v) * self.aero.h_cp) / L
-        fz_f = np.maximum(fz_f - dfz, 0.0)
-        fz_r = np.maximum(fz_r + dfz, 0.0)
-        return fz_f, fz_r
-
-    def axle_grip(self, fz_axle):
-        """(Fx_max, Fy_max) for one axle (two wheels) at axle load ``fz_axle``."""
-        s = self.tyre.mu_scale(np.asarray(fz_axle) / 2.0)
-        return self.tyre.mu_x * s * fz_axle, self.tyre.mu_y * s * fz_axle
 
     # ---- helpers ------------------------------------------------------------
     def with_changes(self, **changes) -> "Vehicle":
@@ -288,7 +278,8 @@ class Vehicle:
 def load_vehicle(path) -> Vehicle:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     build = {"tyre": lambda d: Tyre(**d), "aero": Aero.from_dict,
-             "powertrain": lambda d: Powertrain(**d)}
+             "powertrain": lambda d: Powertrain(**d),
+             "suspension": lambda d: None if d is None else Suspension(**d)}
     kwargs = {k: build[k](v) if k in build else v for k, v in data.items()}
     return Vehicle(**kwargs)
 
@@ -296,6 +287,8 @@ def load_vehicle(path) -> Vehicle:
 def save_vehicle(veh: Vehicle, path) -> None:
     d = veh.to_dict()
     d["aero"].pop("wheelbase", None)
+    if d.get("suspension") is None:
+        d.pop("suspension", None)
     for dev in d["aero"]["devices"].values():
         for k in [k for k, v in dev.items() if v is None]:
             del dev[k]
