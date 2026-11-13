@@ -1,0 +1,15 @@
+# 점수 환산 공식 — **자리표시자 (PLACEHOLDER)**.
+# FS 계열 대회의 일반적인 "시간 비율" 공식 형태만 흉내 냈다. FSK 규정집의 실제 공식·만점·기준 기록으로 교체할 것.
+#
+# time_ratio:  T_max = tmax_factor × T_min
+#   score = a × ((T_max/T)^p − 1) / ((T_max/T_min)^p − 1) + b      (T ≥ T_max 이면 b, T ≤ T_min 이면 a + b)
+# 기준 기록 T_min: t_min_s (절대값) 또는 t_min_ratio (= 기준 차량 시뮬레이션 시간 × 비율; 합성 트랙에서도 쓸 수 있게).
+# efficiency_factor: EF = (T_ref/T) × (E_ref/E), score = a × clip((EF − ef_min)/(ef_max − ef_min), 0, 1)
+#   T_ref, E_ref 는 기준 차량 엔듀런스 시간·에너지 × 비율.
+placeholder: true
+events:
+  acceleration: {formula: time_ratio, a: 71.5, b: 3.5, exponent: 1, tmax_factor: 1.5, t_min_ratio: 0.90}
+  skidpad:      {formula: time_ratio, a: 71.5, b: 3.5, exponent: 2, tmax_factor: 1.25, t_min_ratio: 0.95}
+  autocross:    {formula: time_ratio, a: 95.5, b: 4.5, exponent: 1, tmax_factor: 1.25, t_min_ratio: 0.95}
+  endurance:    {formula: time_ratio, a: 300.0, b: 25.0, exponent: 1, tmax_factor: 1.333, t_min_ratio: 0.95}
+  efficiency:   {formula: efficiency_factor, a: 100.0, t_ref_ratio: 0.95, e_ref_ratio: 0.85, ef_min: 0.5, ef_max: 1.0}

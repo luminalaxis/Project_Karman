@@ -1,0 +1,46 @@
+# 기본 차량 설정 (내년 차량 설계 검토용 기준차).
+# 모든 값은 지시서 2절의 [ ] 가정값이다 (실측값 아님). 실측/확정되면 값만 숫자로 바꾸거나
+# assumed: false 로 바꾼다. 숫자만 쓰면 (예: total_mass_kg: 318) 자동으로 assumed: false 로 처리된다.
+# 단위: SI (kg, m, N, W, rpm). 근거는 ASSUMPTIONS.md 참고.
+name: e_formula_next_baseline
+description: "SeoulTech e_formula next-year concept, ASSUMED baseline (not measured)"
+
+mass:
+  total_mass_kg: {value: 320.0, unit: kg, assumed: true, note: "드라이버 포함 총질량"}
+  cg_height_m: {value: 0.28, unit: m, assumed: true, note: "무게중심 높이 (지면 기준)"}
+  static_front_weight_fraction: {value: 0.47, unit: "-", assumed: true, note: "정적 전륜 하중 비율"}
+
+geometry:
+  wheelbase_m: {value: 1.55, unit: m, assumed: true}
+  track_front_m: {value: 1.22, unit: m, assumed: true}
+  track_rear_m: {value: 1.20, unit: m, assumed: true}
+  lltd_front: {value: 0.52, unit: "-", assumed: true, note: "횡하중이동 전륜 분담률 (롤 강성 배분)"}
+
+tire:
+  radius_m: {value: 0.228, unit: m, assumed: true, note: "10인치 휠 타이어 유효 반경"}
+  mu0: {value: 1.45, unit: "-", assumed: true, note: "기준 하중 Fz0 에서의 실효 마찰계수 (횡방향)"}
+  fz0_n: {value: 700.0, unit: N, assumed: true, note: "μ0 기준 하중"}
+  load_sensitivity: {value: -0.15, unit: "-", assumed: true, note: "μ = μ0·(1 + k·(Fz−Fz0)/Fz0) 의 k"}
+  mu_lon_lat_ratio: {value: 1.0, unit: "-", assumed: true, note: "종/횡 μ 비율 (마찰 타원)"}
+  rolling_resistance_coeff: {value: 0.015, unit: "-", assumed: true}
+
+powertrain:
+  max_power_w: {value: 80000.0, unit: W, assumed: true, note: "어큐뮬레이터 출력 상한, FSK 규정 확인 필요"}
+  motor_max_torque_nm: {value: 230.0, unit: N*m, assumed: true}
+  motor_max_rpm: {value: 6500.0, unit: rpm, assumed: true}
+  gear_ratio: {value: 4.0, unit: "-", assumed: true, note: "최종 감속비"}
+  efficiency: {value: 0.85, unit: "-", assumed: true, note: "어큐뮬레이터→휠 종합 효율 (토크 경로에도 동일 적용)"}
+  regen_max_power_w: {value: 20000.0, unit: W, assumed: true, note: "회생 상한 (어큐뮬레이터 기준)"}
+  regen_enabled: true
+  differential: lsd   # lsd (이상적 배분: 축 합) | open (2 x min(좌, 우))
+
+brakes:
+  distribution: ideal   # ideal (축별 잔여 그립 합) | fixed (front_bias 고정)
+  front_bias: {value: 0.65, unit: "-", assumed: true, note: "fixed 일 때만 사용"}
+
+aero:
+  cla_m2: {value: 3.5, unit: m^2, assumed: true, note: "다운포스 양수"}
+  cda_m2: {value: 1.4, unit: m^2, assumed: true}
+  balance_front: {value: 0.45, unit: "-", assumed: true, note: "전륜 다운포스 비율 (항력 피칭모멘트 포함 정의)"}
+  air_density_kg_m3: {value: 1.20, unit: kg/m^3, assumed: true}
+  # components_file: aero_components.yaml   # 지정하면 위 ClA/CdA/밸런스를 부품 합성값으로 대체

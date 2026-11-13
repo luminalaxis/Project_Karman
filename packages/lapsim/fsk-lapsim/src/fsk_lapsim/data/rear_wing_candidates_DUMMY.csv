@@ -1,0 +1,14 @@
+# DUMMY DATA — 실제 ANSYS 결과가 아님. 형식 예시용으로 임의로 만든 값이다 (파일명/notes 에 DUMMY 표기).
+# Cl_2d, Cd_2d, Cm_2d: chord_ref_m 기준 2D 계수 (다운포스 양수). Cm_2d 는 cm_ref_x_m(차량 좌표, 앞차축 기준 뒤쪽 +)에 대한
+# 값이며 다운포스가 기준점 뒤에 작용하면 양수 → x_cp = cm_ref_x_m + Cm/Cl·chord.
+# flap1_aoa_deg, flap2_aoa_deg, flap2_gap_mm 은 자유 파라미터 열 (그대로 표에 표시됨).
+# 3D CFD 값이 있으면 cla_3d_m2, cda_3d_m2 열을 추가하면 2D→3D 변환 대신 그 값을 쓴다.
+config_id,flap1_id,flap2_id,flap1_aoa_deg,flap2_aoa_deg,flap2_gap_mm,Cl_2d,Cd_2d,Cm_2d,cm_ref_x_m,chord_ref_m,span_m,mass_kg,notes
+RW01,F1A,F2A,22,42,12,2.78,0.098,0.973,1.70,0.70,1.10,4.9,DUMMY flap A/A nominal
+RW02,F1A,F2B,22,42,12,2.92,0.115,1.022,1.70,0.70,1.10,5.1,DUMMY flap A/B nominal
+RW03,F1B,F2A,24,42,12,2.96,0.121,1.006,1.70,0.70,1.10,5.0,DUMMY flap B/A nominal
+RW04,F1B,F2B,24,42,12,3.08,0.138,1.047,1.70,0.70,1.10,5.2,DUMMY flap B/B nominal
+RW05,F1A,F2B,22,45,12,3.01,0.129,1.054,1.70,0.70,1.10,5.1,DUMMY A/B flap2 +3 deg
+RW06,F1B,F2B,24,45,12,3.14,0.155,1.068,1.70,0.70,1.10,5.2,DUMMY B/B flap2 +3 deg
+RW07,F1B,F2A,24,42,9,2.99,0.119,1.016,1.70,0.70,1.10,5.0,DUMMY B/A flap2 gap -3 mm
+RW08,F1A,F2A,20,40,12,2.64,0.088,0.924,1.70,0.70,1.10,4.9,DUMMY A/A both flaps -2 deg

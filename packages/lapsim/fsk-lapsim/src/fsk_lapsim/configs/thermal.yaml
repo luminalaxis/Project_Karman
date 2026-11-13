@@ -1,0 +1,25 @@
+# 모터·인버터·어큐뮬레이터 손실 및 집중 열모델 계수. **전부 가정값** (일반적인 FS 급 PMSM / SiC·IGBT 인버터 수준).
+# 실제 모터·인버터 데이터시트(효율 맵, 열저항)로 교체할 것.
+motor:
+  copper_loss_coeff_w_per_nm2: {value: 0.066, unit: W/(N*m)^2, assumed: true, note: "P_cu = k·T² (230 N·m 에서 3.5 kW)"}
+  iron_loss_coeff: {value: 0.156, unit: W/(rad/s)^1.5, assumed: true, note: "P_fe = k·ω^1.5 (3300 rpm 에서 1 kW)"}
+  iron_loss_exponent: {value: 1.5, unit: "-", assumed: true}
+  windage_coeff_w_per_rad2s2: {value: 6.5e-4, unit: W/(rad/s)^2, assumed: true, note: "6500 rpm 에서 0.3 kW"}
+  heat_capacity_j_per_k: {value: 6000.0, unit: J/K, assumed: true, note: "고정자+권선 집중 열용량"}
+  thermal_resistance_k_per_w: {value: 0.02, unit: K/W, assumed: true, note: "권선→냉각수"}
+  temperature_limit_c: {value: 140.0, unit: degC, assumed: true}
+inverter:
+  idle_loss_w: {value: 50.0, unit: W, assumed: true}
+  linear_loss_w_per_a: {value: 3.0, unit: W/A, assumed: true, note: "스위칭 + 소자 전압강하"}
+  resistive_loss_ohm: {value: 0.006, unit: ohm, assumed: true, note: "3상 합성 도통 저항"}
+  torque_constant_nm_per_a: {value: 0.77, unit: N*m/A, assumed: true, note: "상전류 I = |T|/k_t"}
+  heat_capacity_j_per_k: {value: 1500.0, unit: J/K, assumed: true}
+  thermal_resistance_k_per_w: {value: 0.03, unit: K/W, assumed: true}
+  temperature_limit_c: {value: 90.0, unit: degC, assumed: true, note: "방열판 기준"}
+accumulator:
+  pack_voltage_v: {value: 400.0, unit: V, assumed: true}
+  pack_resistance_ohm: {value: 0.10, unit: ohm, assumed: true}
+  heat_capacity_j_per_k: {value: 45000.0, unit: J/K, assumed: true, note: "셀 약 40 kg × 1.1 kJ/kgK"}
+  thermal_resistance_k_per_w: {value: 0.05, unit: K/W, assumed: true, note: "공랭"}
+  temperature_limit_c: {value: 60.0, unit: degC, assumed: true}
+ambient_c: {value: 30.0, unit: degC, assumed: true, note: "대회 기간 영광 8월 가정"}

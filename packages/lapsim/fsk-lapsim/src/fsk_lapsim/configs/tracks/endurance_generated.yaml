@@ -1,0 +1,7 @@
+# 규정 기반 합성 엔듀런스 루프 (시드 고정, Dubins 폐합). 실제 FSK 코스 아님.
+name: endurance_generated_seed7
+type: generated
+generator:
+  kind: endurance
+  seed: 7
+  target_length_m: 1000

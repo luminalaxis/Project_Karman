@@ -1,0 +1,41 @@
+# 공력 부품 목록 (가정 예시). x 는 앞차축 기준 뒤쪽(+) [m], z 는 지면 기준 높이 [m].
+# 합성 결과가 vehicle.yaml 의 ClA 3.5 / CdA 1.4 / 밸런스 45 % 와 정확히 같도록 배치했다.
+#  - x_cp_m : 다운포스 압력중심. 앞축 분담 = 1 − x_cp/L (프론트윙은 >1, 리어윙은 <0 이 정상)
+#  - z_cp_m : 항력 작용 높이. 지면 기준 피칭모멘트 −CdA·z/L 만큼 앞축 다운포스가 줄어든 것으로 합산
+#             (CFD 밸런스가 이미 항력 모멘트를 포함하면 z_cp_m 을 0 으로 둔다)
+#  - mass_kg, x_mass_m, z_mass_m : 부품 질량과 질량중심. vehicle.yaml 총질량 320 kg 에 이 기준 부품
+#             질량이 이미 포함되어 있다 (baseline_included_in_vehicle_mass). 부품을 바꾸면 차이만큼
+#             총질량·CG 높이·전후 배분이 갱신된다.
+description: "ASSUMED baseline aero package (front wing, undertray, rear wing, body)"
+baseline_included_in_vehicle_mass: true
+components:
+  - name: front_wing
+    cla_m2: {value: 1.20, assumed: true}
+    cda_m2: {value: 0.30, assumed: true}
+    x_cp_m: {value: -0.62, assumed: true}
+    z_cp_m: {value: 0.20, assumed: true}
+    mass_kg: {value: 3.5, assumed: true}
+    x_mass_m: {value: -0.60, assumed: true}
+    z_mass_m: {value: 0.15, assumed: true}
+  - name: undertray
+    cla_m2: {value: 1.00, assumed: true}
+    cda_m2: {value: 0.10, assumed: true}
+    x_cp_m: {value: 0.45275, assumed: true, note: "밸런스 45 % 가 되도록 역산한 값"}
+    z_cp_m: {value: 0.05, assumed: true}
+    mass_kg: {value: 4.0, assumed: true}
+    x_mass_m: {value: 0.80, assumed: true}
+    z_mass_m: {value: 0.08, assumed: true}
+  - name: rear_wing
+    cla_m2: {value: 1.30, assumed: true}
+    cda_m2: {value: 0.45, assumed: true}
+    x_cp_m: {value: 1.95, assumed: true}
+    z_cp_m: {value: 0.95, assumed: true}
+    mass_kg: {value: 5.0, assumed: true}
+    x_mass_m: {value: 1.90, assumed: true}
+    z_mass_m: {value: 0.95, assumed: true}
+  - name: body
+    cla_m2: {value: 0.0, assumed: true}
+    cda_m2: {value: 0.55, assumed: true, note: "차체·드라이버·휠·서스펜션 항력"}
+    x_cp_m: {value: 0.80, assumed: true}
+    z_cp_m: {value: 0.45, assumed: true}
+    mass_kg: {value: 0.0, note: "차체 질량은 차량 총질량에 포함, 여기선 0"}
