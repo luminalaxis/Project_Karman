@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 rem Project_Karman 폴더 아이콘 적용 (clone 후 한 번 실행)
 cd /d "%~dp0.."
 attrib +s +h desktop.ini
