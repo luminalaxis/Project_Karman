@@ -1,0 +1,112 @@
+# Example FSAE electric car with a full aero package (illustrative values, not a real car).
+# Units are in the key names. Every value can be changed from the CLI with
+#   --set suspension.front.spring_rate_N_per_mm=40
+name: FSAE EV example (aero)
+
+environment:
+  temperature_C: 25
+  pressure_kPa: null          # null -> from altitude_m (ISA)
+  altitude_m: 0
+  relative_humidity: 0.5
+
+mass:
+  total_kg: 285               # car + 68 kg driver
+  weight_dist_front: 0.47     # static front axle share
+  cg_height_mm: 270
+  unsprung_front_kg: 15       # both corners
+  unsprung_rear_kg: 16
+  pitch_inertia_kgm2: null    # sprung mass, transient solver only (null -> estimated)
+  roll_inertia_kgm2: null
+
+geometry:
+  wheelbase_mm: 1550
+  track_front_mm: 1220
+  track_rear_mm: 1190
+
+tires:                        # 16x7.5-10 slick, scaled to a real track surface
+  radius_mm: 203
+  mu_x: 1.50
+  mu_y: 1.55
+  ref_load_N: 650
+  load_sensitivity: -0.12     # mu drops 12 % per +100 % load
+  min_mu_factor: 0.5
+  vertical_rate_N_per_mm: 100
+  peak_slip_deg: 6.5
+  camber_optimum_deg: -1.2    # best camber of the loaded outer wheel
+  camber_sensitivity_per_deg2: 0.006
+  rolling_resistance: 0.015
+
+suspension:
+  front:
+    spring_rate_N_per_mm: 40
+    motion_ratio: 1.0         # spring travel / wheel travel
+    arb_rate_Nm_per_deg: 250  # ARB roll stiffness at the wheels
+    heave_spring_N_per_mm: 40 # third (heave) element at the wheel (0 = none)
+    roll_center_mm: 30
+    static_ride_height_mm: 35
+    static_camber_deg: -1.8
+    camber_gain_deg_per_mm: -0.025
+    anti_dive: 0.15
+    damping_ratio: 0.65       # transient solver, of the corner spring (tyre not included); or damper_rate_Ns_per_mm
+  rear:
+    spring_rate_N_per_mm: 45
+    motion_ratio: 1.0
+    arb_rate_Nm_per_deg: 150
+    heave_spring_N_per_mm: 30
+    roll_center_mm: 50
+    static_ride_height_mm: 45
+    static_camber_deg: -1.2
+    camber_gain_deg_per_mm: -0.02
+    anti_lift: 0.10
+    anti_squat: 0.20
+    damping_ratio: 0.65
+
+brakes:
+  bias_front: null            # null = ideal brake balance, or e.g. 0.62
+
+aero:
+  type: table                 # constant | table | response_surface
+  file: ../aeromaps/fsae_example_grid.csv
+  default_mode: high_df
+  cla_scale: 1.0              # setup knobs (e.g. wing angle / size what-ifs)
+  cda_scale: 1.0
+  cop_shift: 0.0              # added to the front downforce fraction
+  drag_height_mm: 520         # height of the drag resultant (rear wing raises it)
+  floor_width_mm: 900         # used for floor clearance in roll
+  bottoming_clearance_mm: 5   # floor touches the ground below this
+  cop_lateral_shift_mm_per_deg: 15   # downforce moves to the outside of the turn with roll
+  strategy:
+    type: rule                # fixed | rule | ideal
+    open_mode: drs
+    closed_mode: high_df
+    open_radius_m: 60
+    min_length_m: 15
+    min_speed_kmh: 80         # below this the rear downforce is worth more for traction
+    open_delay_s: 0.20
+    close_delay_s: 0.15
+    close_anticipation: false
+
+powertrain:
+  type: ev
+  drive: rwd
+  differential: lsd
+  efficiency: 0.92            # only used without a motor model
+  ev:
+    motor: emrax_228          # datasheet v1.7: 220 Nm, 6500 rpm, 124 kW peak, rotor 0.0398 kg m^2
+    motor_variant: MV         # HV | MV | LV winding (sets KV, KT, peak current, resistance)
+    motor_cooling: LC         # AC | LC | CC (continuous rating, rotor inertia)
+    dc_voltage_V: 550         # accumulator voltage under load (FS limit 600 V) -> base speed KV x V
+    controller_current_A: null   # inverter phase-current limit [A_rms]; null -> motor peak (MV: 360 A)
+    n_motors: 1
+    reduction_ratio: 3.6
+    drivetrain_efficiency: 0.97   # chain / gears
+    inverter_efficiency: 0.97
+    power_limit_kW: 80        # accumulator power limit (battery side)
+
+battery:                      # ASSUMED values - replace with your accumulator
+  capacity_kWh: 7.5           # nominal pack energy (null -> no endurance energy check)
+  usable_fraction: 0.95       # SOC window actually usable -> 7.1 kWh
+  max_power_kW: null          # pack discharge limit; effective limit = min(this, power_limit_kW)
+  regen_power_kW: 0           # recuperation limit at the battery (0 = no regen)
+  regen_axle_share: 0.35      # share of the braking force on the driven (rear) axle
+
