@@ -1,10 +1,11 @@
-# Project_Karman
-
-<img src="assets/karman.png" width="120" alt="Project_Karman 아이콘">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/karman_lockup_dark.svg">
+  <img src="assets/brand/karman_lockup_light.svg" width="420" alt="Project Karman">
+</picture>
 
 서울과학기술대학교 e_formula (MIP) 공력팀의 Formula Student Korea(FSK) 공력 개발 도구를 한곳에 모은 모노레포입니다.
 
-> 이름은 카르만 소용돌이 열(Kármán vortex street)에서 따왔습니다.
+> 이름은 카르만 소용돌이 열(Kármán vortex street)에서 따왔습니다. 로고의 K는 세로 줄기(물체) 뒤로 서로 엇갈려 말리는 두 소용돌이로 이루어져 있습니다. 로고 원본은 [`assets/brand/`](assets/brand)에 있습니다.
 
 ## 도구 지도
 
