@@ -182,7 +182,7 @@ class Launcher(tk.Tk):
         inner.pack(fill="x", padx=16, pady=12)
 
         num = tk.Label(inner, text=str(idx + 1), bg=CARD, fg=DIM, font=(FONT, 16, "bold"), width=2)
-        num.grid(row=0, column=0, rowspan=3, sticky="n", padx=(0, 10))
+        num.grid(row=0, column=0, rowspan=4, sticky="n", padx=(0, 10))
 
         title_row = tk.Frame(inner, bg=CARD)
         title_row.grid(row=0, column=1, sticky="w")
@@ -193,12 +193,19 @@ class Launcher(tk.Tk):
 
         tag = tk.Label(inner, text=tool["tagline"], bg=CARD, fg=INK, font=(FONT, 10), anchor="w")
         tag.grid(row=1, column=1, sticky="w", pady=(2, 0))
-        det = tk.Label(inner, text=tool.get("detail", ""), bg=CARD, fg=MUTED, font=(FONT, 9), anchor="w")
-        det.grid(row=2, column=1, sticky="w")
+        use_row = tk.Frame(inner, bg=CARD)
+        use_row.grid(row=2, column=1, sticky="w", pady=(6, 2))
+        use_tag = tk.Label(use_row, text="언제", bg=CARD, fg=RED, font=(FONT, 9, "bold"))
+        use_tag.pack(side="left", anchor="n", padx=(0, 8))
+        use = tk.Label(use_row, text=tool.get("use", ""), bg=CARD, fg="#D4D5D9", font=(FONT, 9),
+                       anchor="w", justify="left", wraplength=400)
+        use.pack(side="left")
+        det = tk.Label(inner, text=tool.get("detail", ""), bg=CARD, fg=DIM, font=(FONT, 9), anchor="w")
+        det.grid(row=3, column=1, sticky="w")
         inner.grid_columnconfigure(1, weight=1, minsize=430)
 
         btns = tk.Frame(inner, bg=CARD)
-        btns.grid(row=0, column=2, rowspan=3, sticky="e")
+        btns.grid(row=0, column=2, rowspan=4, sticky="e")
         primary = Button(btns, "", lambda t=tool: self.primary_action(t), primary=True)
         primary.pack(side="right")
         folder = Button(btns, "폴더", lambda t=tool: open_path(ROOT / t["path"]))
@@ -207,7 +214,7 @@ class Launcher(tk.Tk):
         widgets = dict(card=card, inner=inner, num=num, title_row=title_row, name=name, tag=tag, det=det,
                        btns=btns, chip=chip, primary=primary, folder=folder)
 
-        hover_targets = [card, inner, num, title_row, name, tag, det, btns]
+        hover_targets = [card, inner, num, title_row, name, tag, use_row, use_tag, use, det, btns]
 
         def paint(color):
             for w in hover_targets:

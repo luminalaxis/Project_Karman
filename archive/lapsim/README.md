@@ -1,3 +1,5 @@
+> **보관됨 (2026-11).** 더 이상 개발하지 않습니다. 이벤트 비교·리포트는 [`packages/fsk-lapsim`](../../packages/fsk-lapsim), 정밀 모델은 [`packages/aerolap`](../../packages/aerolap)을 쓰세요.
+
 # FSK 랩타임 시뮬레이터 (Quasi-Steady-State)
 
 차량 파라미터(질량·타이어·파워)와 공력(ClA·CdA·공력 밸런스)을 넣고 FSK 코스 랩타임을 계산하는 도구.
