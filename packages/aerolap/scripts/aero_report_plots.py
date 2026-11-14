@@ -53,6 +53,7 @@ def save(fig, name):
 
 def run_recommended():
     cfg = car_cfg(NOMINAL, {p: 1.10 for p in ("front", "rear", "under")}, 0.55 - BALANCE)
+    cfg["name"] = "MEF7 (final)"
     path = OUT / "recommended.yaml"
     path.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
     cli("events", str(path), "--level", "L4", "--autocross", TRACK, "--endurance", TRACK,

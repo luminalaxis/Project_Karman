@@ -94,6 +94,8 @@ python scripts/aero_optimize.py --grid | tee out/aero_targets_v6/grid_log.txt   
 python scripts/aero_report_plots.py                             # MEF7 실행, 그래프, aerolap run / aero-exchange, L0 (~2 분)
 ```
 
+PDF 보고서: [reports/MEF7_report.pdf](reports/MEF7_report.pdf) (`python scripts/mef7_report_pdf.py`, MEF7만).
+
 결과: `out/aero_targets_v6/` (`summary.txt`, `optimumlap_L0.txt`, 패키지별 `events.txt`·`trace_*.csv`, `figures/`).
 트랙·차량 변환: `aerolap import-track ...V6_FIXED_851m.OLTra --out data/tracks/fsk2026_v6_fixed.csv`,
 `aerolap import-vehicle ...MIP_228MV_FD4_Diagnostic.OLVeh --full --base data/vehicles/fsk2026.yaml` (`mip_228mv_fd4.yaml` 머리말).
