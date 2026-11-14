@@ -41,6 +41,9 @@ BASE_MASS = 310.0 - MASS["front"] - MASS["rear"]  # 2026 car (310 kg) minus its 
 def vehicle(name, parts):
     car = yaml.safe_load((ROOT / BASE_VEHICLE).read_text(encoding="utf-8"))
     car["name"] = f"FSK aero target: {name}"
+    mf = (car.get("tires") or {}).get("mf_file")
+    if mf:  # the package YAML is written to OUT: keep the .tir path valid
+        car["tires"]["mf_file"] = str(((ROOT / BASE_VEHICLE).parent / mf).resolve())
     car["mass"]["total_kg"] = BASE_MASS + sum(MASS.get(p, 0.0) for p in parts)
     car["aero"] = {**{k: car["aero"][k] for k in ("drag_height_mm", "floor_width_mm", "bottoming_clearance_mm")},
                    "type": "constant", "cla": 0.0, "cda": 0.0, "cop_front": 0.5,

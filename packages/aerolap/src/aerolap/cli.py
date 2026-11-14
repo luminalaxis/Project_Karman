@@ -400,7 +400,7 @@ def _import_optimumlap_track(args, src: Path) -> int:
     from .importers import read_optimumlap_track, write_segment_csv
 
     ol = read_optimumlap_track(src)
-    segs = ol.segments()
+    segs = ol.segments(spiral=args.ol_spiral and not args.smooth)  # smoothing needs the closed xy line
     if args.reverse:
         segs = [(k, length, r, {"left": "right", "right": "left"}.get(d, d)) for k, length, r, d in segs[::-1]]
     closed = ol.closed if args.closed is None else args.closed == "yes"
@@ -854,6 +854,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="smoothing wavelength [m]: shorter wiggles of the line are treated as noise (default 10)")
     sp.add_argument("--reverse", action="store_true", help="drive the line in the opposite direction")
     sp.add_argument("--closed", choices=["yes", "no"], help="override the closed-loop detection")
+    sp.add_argument("--ol-spiral", action="store_true",
+                    help="OptimumLap track: radius changes linearly into a following same-direction corner, as "
+                         "OptimumLap reads it (matches its lap time; the xy line then does not close)")
     sp.add_argument("--smooth", type=float, metavar="M",
                     help=".oltra: write the line as x-y coordinates smoothed with this cut-off wavelength [m] "
                          "(removes the curvature noise of cone-map tracks)")

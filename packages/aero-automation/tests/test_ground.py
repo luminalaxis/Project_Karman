@@ -110,3 +110,13 @@ def test_ground_cases_and_screening(tmp_path):
     r = screen(cfg, cases, log=lambda *_: None)
     assert len(r["geometries"]) == 4  # 받음각은 형상 단위에서 빠짐
     assert {g["ground_clearance"] for g in r["geometries"]} == {30, 60}
+
+
+def test_high_wing_mesh_stays_small(tmp_path):
+    # the wing-ground passage refinement must not cover the domain when the wing is far from the ground
+    # (clearance >= 1 chord): it used to fill a 1.2 h radius with near-wall cells (2 M cells at 2 chords)
+    settings = dict(chord=0.375, reynolds=5e5, surface_cells=60, flap_surface_cells=40,
+                    near_size=0.03, wake_size=0.05, wake_length=1.0, ground_downstream=4, ground_height=4)
+    low = generate_mesh(make_job({**TWO, "ground_clearance": 30, "aoa": 4}, settings, tmp_path / "low"), Path("."))
+    high = generate_mesh(make_job({**TWO, "ground_clearance": 750, "aoa": 4}, settings, tmp_path / "high"), Path("."))
+    assert high["cells"] < 1.5 * low["cells"]

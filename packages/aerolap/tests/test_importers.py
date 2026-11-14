@@ -224,3 +224,17 @@ def load_yaml_keys(path):
     import yaml
 
     return set(yaml.safe_load(Path(path).read_text(encoding="utf-8")))
+
+
+def test_optimumlap_spiral_radius():
+    # OptimumLap reads a corner followed by a same-direction corner as a linear radius change (checked against
+    # the cornerRadius channel of an OptimumLap result); opt-in because the xy line no longer closes
+    ol = read_optimumlap_track(OLTRA)
+    plain, spiral = ol.segments(), ol.segments(spiral=True)
+    assert len(plain) == len(ol.lengths) and len(spiral) > len(plain)
+    assert sum(s[1] for s in spiral) == pytest.approx(ol.length)
+    i = next(k for k in range(len(ol.lengths) - 1) if ol.directions[k] == ol.directions[k + 1] != 0
+             and ol.radii[k] != ol.radii[k + 1])
+    lo, hi = sorted((ol.radii[i], ol.radii[i + 1]))
+    pieces = [r for (kind, length, r, d) in spiral if kind == "corner" and lo - 1e-9 <= r <= hi + 1e-9]
+    assert any(lo < r < hi for r in pieces)  # radii in between appear only with the spiral reading
