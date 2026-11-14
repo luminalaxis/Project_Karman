@@ -265,6 +265,11 @@ def apply_defaults(raw: dict) -> dict:
     for axle in ("front", "rear"):
         susp[axle] = deep_merge(AXLE_DEFAULTS, susp.get(axle, {}) or {})
     cfg["aero"]["strategy"] = deep_merge(STRATEGY_DEFAULTS, cfg["aero"].get("strategy") or {})
+    # a simple component's design variable is its scale (default 1): write it in, so sweeps / exchange /
+    # aero-split that read aero.components.<name>.scale work when the file leaves it out
+    for comp in (cfg["aero"].get("components") or {}).values():
+        if isinstance(comp, dict) and not comp.get("type"):
+            comp.setdefault("scale", 1.0)
     return cfg
 
 

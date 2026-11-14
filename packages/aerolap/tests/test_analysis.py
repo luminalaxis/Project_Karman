@@ -72,5 +72,5 @@ def test_cli_run_and_compare(tmp_path):
     assert main(["run", veh, trk, "--coarse", "--out", str(tmp_path / "run")]) == 0
     assert (tmp_path / "run" / "trace.csv").exists() and (tmp_path / "run" / "lap.png").exists()
     assert main(["compare", veh, trk, "--coarse", "--levels", "L0,L5", "--out", str(tmp_path / "cmp")]) == 0
-    assert "L5" in (tmp_path / "cmp" / "ladder.txt").read_text()
+    assert "L5" in (tmp_path / "cmp" / "ladder.txt").read_text(encoding="utf-8")
     assert main(["run", veh, trk, "--set", "mass.total_kg=-1", "--out", str(tmp_path / "bad")]) == 2

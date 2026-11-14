@@ -185,4 +185,4 @@ def test_base_file_paths_and_cycles(tmp_path):
 def test_tire_cli(tmp_path):
     assert cli_main(["tire", str(TIR), "--mu-x", "1.5", "--mu-y", "1.55", "--out", str(tmp_path)]) == 0
     assert (tmp_path / "tire.png").exists()
-    assert "Magic Formula" in (tmp_path / "tire.txt").read_text()
+    assert "Magic Formula" in (tmp_path / "tire.txt").read_text(encoding="utf-8")

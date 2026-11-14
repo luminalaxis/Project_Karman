@@ -132,7 +132,7 @@ def test_lap_result_csv(ev_cfg, tmp_path):
     track = Track.from_file(DATA / "tracks" / "fsae_accel.csv")
     res = QSSSolver(SolverOptions.coarse()).solve(VehicleModel(ev_cfg), track, start="standing")
     res.to_csv(tmp_path / "trace.csv")
-    header = (tmp_path / "trace.csv").read_text().splitlines()[0].split(",")
+    header = (tmp_path / "trace.csv").read_text(encoding="utf-8").splitlines()[0].split(",")
     for col in ("s_m", "v_kmh", "rh_front_mm", "roll_deg", "cla", "cop_front", "fz_fl_N", "aero_mode"):
         assert col in header
 

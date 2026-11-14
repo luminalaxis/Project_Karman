@@ -79,6 +79,7 @@ py -m aerolap.gui
 차량 파일에 모르는 키(오타)가 있으면 로그 창(명령줄은 stderr)에 비슷한 이름과 함께 경고가 나옵니다.
 
 **26년도 차·FSK 트랙 결과 모음: [docs/results_fsk2026.md](docs/results_fsk2026.md)**
+**MEF7 공력 목표(MIP 228MV FD4 · V6 FIXED 트랙): [docs/results_mef7_v6.md](docs/results_mef7_v6.md)**
 
 ## 빠른 시작
 

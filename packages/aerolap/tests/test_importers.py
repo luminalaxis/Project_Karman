@@ -171,7 +171,7 @@ def test_optimumlap_import_cli_and_l0_lap(tmp_path):
     assert main(["import-vehicle", str(OLVEH), "--full", "--out", str(full)]) == 0
     fc = load_vehicle_config(full)
     assert fc["powertrain"]["ev"]["motor"] == "emrax_228" and fc["battery"]["capacity_kWh"] is not None
-    assert "ASSUMED" in full.read_text()
+    assert "ASSUMED" in full.read_text(encoding="utf-8")
 
 
 def _strip(cfg):
@@ -223,4 +223,4 @@ def test_smoothed_optimumlap_line_stays_on_the_track(tmp_path):
 def load_yaml_keys(path):
     import yaml
 
-    return set(yaml.safe_load(Path(path).read_text()))
+    return set(yaml.safe_load(Path(path).read_text(encoding="utf-8")))
