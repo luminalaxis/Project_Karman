@@ -11,3 +11,6 @@ Thumbs.db
 *.cas.h5
 *.dat.h5
 *.trn
+
+# 런처 로그
+launcher/logs/

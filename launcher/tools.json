@@ -1,0 +1,63 @@
+{
+  "_comment": "Project_Karman 런처에 표시할 도구 목록. 새 도구를 추가하려면 항목을 하나 더 넣으세요. path는 레포 루트 기준, {python}은 런처를 실행한 파이썬으로 바뀝니다. kind: console(새 터미널 창), gui(창 앱, 콘솔 없이 실행), docs(폴더·README만 열기)",
+  "tools": [
+    {
+      "id": "aero-automation",
+      "name": "Aero Automation",
+      "tagline": "2D 다요소 날개 Fluent 배치 해석 자동화",
+      "detail": "케이스 생성 → 스크리닝 → gmsh 메쉬 → Fluent → Cl/Cd 순위",
+      "status": "사용 중",
+      "path": "packages/aero-automation",
+      "kind": "console",
+      "run": "\"{python}\" -m aero_automation",
+      "requires": ["numpy", "matplotlib", "gmsh"],
+      "install": "\"{python}\" -m pip install -e ."
+    },
+    {
+      "id": "aerolap",
+      "name": "AeroLap",
+      "tagline": "공력·서스펜션 연성 4륜 랩타임 시뮬레이터",
+      "detail": "축별 그립 · 하중이동 · aero map · DRS · 셋업 최적화 (GUI)",
+      "status": "사용 중",
+      "path": "packages/aerolap",
+      "kind": "gui",
+      "run": "\"{python}\" -m aerolap.gui",
+      "requires": ["aerolap", "numpy", "scipy", "matplotlib", "yaml"],
+      "install": "\"{python}\" -m pip install -e ."
+    },
+    {
+      "id": "lapsim",
+      "name": "LapSim",
+      "tagline": "QSS 랩타임 시뮬레이터 · 공력 민감도",
+      "detail": "ClA·CdA·밸런스 변화 → 랩타임, 장치별 목표치 (브라우저 GUI)",
+      "status": "사용 중",
+      "path": "packages/lapsim",
+      "kind": "console",
+      "run": "\"{python}\" -m lapsim gui",
+      "requires": ["numpy", "streamlit", "plotly", "pandas"],
+      "install": "\"{python}\" -m pip install -r requirements.txt"
+    },
+    {
+      "id": "fsk-lapsim",
+      "name": "FSK-LapSim",
+      "tagline": "FSK 전기차 랩타임·에너지 평가 (CLI)",
+      "detail": "공력 설계안을 랩타임과 에너지로 비교 · 열·몬테카를로 리포트",
+      "status": "사용 중",
+      "path": "packages/lapsim/fsk-lapsim",
+      "kind": "console",
+      "run": "\"{python}\" -m fsk_lapsim --help",
+      "requires": ["fsk_lapsim", "typer", "scipy", "pydantic"],
+      "install": "\"{python}\" -m pip install -e \".[dev]\""
+    },
+    {
+      "id": "vortex",
+      "name": "Vortex",
+      "tagline": "터프트 영상 ↔ CFD ↔ AI 대리모델 비교",
+      "detail": "설계 문서 단계 (v0.3) — 폴더와 문서를 엽니다",
+      "status": "설계 단계",
+      "path": "packages/vortex",
+      "kind": "docs",
+      "requires": []
+    }
+  ]
+}
