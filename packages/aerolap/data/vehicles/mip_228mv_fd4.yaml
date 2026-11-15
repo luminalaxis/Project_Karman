@@ -1,7 +1,9 @@
-# MIP 228MV FD4 (OptimumLap file MIP_228MV_FD4_Diagnostic.OLVeh) imported with:
+# MIP 228MV FD4 - LATEST OptimumLap vehicle (data/26 track optimum lap/26262626/Project/Vehicle, mu 1.3, driveefficiency 0.6), imported with:
 #   aerolap import-vehicle data/vehicles/MIP_228MV_FD4_Diagnostic.OLVeh --full --base data/vehicles/fsk2026.yaml --motor emrax_228 --motor-variant MV --motor-cooling LC
-# Same car as fsk2026.yaml except the aero block (OptimumLap constant ClA 0.997 / CdA 0.470).
-# Imported from OptimumLap vehicle 'MIP 228MV FD4 Debug' (MIP_228MV_FD4_Diagnostic.OLVeh) with 'aerolap import-vehicle'.
+# With the motor model AeroLap computes the drivetrain itself (ev.drivetrain_efficiency 0.97, inverter, motor map,
+# battery); powertrain.efficiency (0.6 from OptimumLap) is only used by the OptimumLap-equivalent L0 run of the .OLVeh.
+# Same car as fsk2026.yaml otherwise (aero block: OptimumLap constant ClA 0.997 / CdA 0.470).
+# Imported from OptimumLap vehicle 'MIP_228MV_FD4_Diagnostic' (MIP_228MV_FD4_Diagnostic.OLVeh) with 'aerolap import-vehicle'.
 # Full model: OptimumLap mass / tyres / aero + emrax_228 motor model.
 # Taken from the OptimumLap file:
 #   mass -> mass.total_kg
@@ -28,7 +30,7 @@
 #   battery
 # WARNING: OptimumLap 'masslatfriction' = 310 is not mapped (set tires.load_sensitivity by hand)
 # WARNING: OptimumLap 'masslongfriction' = 310 is not mapped (set tires.load_sensitivity by hand)
-name: MIP 228MV FD4 Debug (OptimumLap import, full model)
+name: MIP_228MV_FD4_Diagnostic (OptimumLap import, full model)
 environment:
   air_density_kg_m3: 1.225
 mass:
@@ -45,8 +47,8 @@ geometry:
   track_rear_mm: 1190
 tires:
   radius_mm: 232.0
-  mu_x: 1.5
-  mu_y: 1.5
+  mu_x: 1.3
+  mu_y: 1.3
   ref_load_N: 650
   load_sensitivity: 0.0
   min_mu_factor: 0.5
@@ -94,7 +96,7 @@ powertrain:
   type: ev
   drive: rwd
   differential: lsd
-  efficiency: 0.9
+  efficiency: 0.6
   ev:
     drivetrain_efficiency: 0.97
     inverter_efficiency: 0.97

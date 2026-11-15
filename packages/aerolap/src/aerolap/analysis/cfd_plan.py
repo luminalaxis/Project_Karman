@@ -154,7 +154,11 @@ def cfd_plan(cfg: dict, component: str, free: list[str] | None = None, aoa_span:
             r = row({**base, key: new})
             if r["geom"] not in {x["geom"] for x in rows}:
                 rows.append(r)
-    a0 = round(dev.aoa / aoa_step) * aoa_step
+    # centre on the EFFECTIVE angle the 3-D wing model reads from the section (geometric - induced: ~10 deg
+    # lower for a high-lift FSAE wing), not on the geometric main-element angle
+    from ..aero.devices import geometry_from_cfg
+
+    a0 = round(dev._alpha_eff(geometry_from_cfg(cfg)) / aoa_step) * aoa_step
     aoa = [float(x) for x in np.arange(a0 - aoa_span, a0 + aoa_span + 1e-9, aoa_step)]
     h = float(dev.height)
     clearance = sorted({max(_fmt(h + d), 10) for d in (-20.0, 0.0, 20.0)}) if ground else []

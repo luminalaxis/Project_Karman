@@ -6,7 +6,7 @@ and runs `aerolap events` (L4) and `aerolap energy` (battery-limited 22 km endur
     python scripts/aero_targets.py            # from packages/aerolap
 
 Other car / track (all three aero_* scripts read these):
-    AERO_VEHICLE=data/vehicles/mip_228mv_fd4.yaml AERO_TRACK=data/tracks/fsk2026_v6_fixed.csv     AERO_OUT=aero_targets_v6 python scripts/aero_targets.py
+    AERO_VEHICLE=data/vehicles/mip_228mv_fd4.yaml AERO_TRACK=data/tracks/fsk2026_v6_ol.csv     AERO_OUT=aero_targets_v6ol python scripts/aero_targets.py
 """
 import os
 import re

@@ -40,14 +40,15 @@ def polar(cla0, cda0, p, s_stall):
     return np.column_stack([S, cla, cda]).tolist()
 
 
-def car_cfg(polars, scales=None, cop_shift=0.0):
+def car_cfg(polars, scales=None, cop_shift=0.0, cfd=None):
+    """``cfd``: polar.json of scripts/cfd_polar.py - its CFD points replace the assumed polar of those parts."""
     cfg = load_vehicle(vehicle("realistic", PACKAGES["realistic"]))
     for part, (cla0, cda0) in PACKAGES["realistic"].items():
         if part == "body":
             continue
         p, st = polars["under" if part == "under" else "wing"]
         c = cfg["aero"]["components"][part]
-        c["points"] = polar(cla0, cda0, p, st)
+        c["points"] = cfd["parts"][part]["points"] if cfd and part in cfd["parts"] else polar(cla0, cda0, p, st)
         c["scale"] = 1.0 if scales is None else float(scales[part])
     cfg["aero"]["cop_shift"] = float(cop_shift)
     return cfg
@@ -110,8 +111,24 @@ def grid():
                                                              bal - BALANCE))
 
 
+def grid_cfd(path):
+    """CFD polars for front / rear (independent angles), assumed nominal polar for the undertray (scale 1.10)."""
+    import json
+    cfd = json.loads(Path(path).read_text(encoding="utf-8"))
+    k = cfd["scale_per_deg"]
+    print(f"CFD polar: {path}  (scale = 1 + {k} x d_aoa)")
+    for df in (-2, 0, 1, 2, 3, 4):
+        for dr in (-2, 0, 1, 2, 3, 4):
+            for bal in (0.45, 0.50, 0.55, 0.60):
+                row(f"front {df:+d} rear {dr:+d} bal={bal:.2f}",
+                    car_cfg(NOMINAL, {"front": 1 + k * df, "rear": 1 + k * dr, "under": 1.10}, bal - BALANCE, cfd))
+
+
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
+    if "--cfd" in sys.argv:  # python scripts/aero_optimize.py --cfd out/cfd_polar/polar.json   (~15 min)
+        grid_cfd(sys.argv[sys.argv.index("--cfd") + 1])
+        sys.exit()
     if "--grid" in sys.argv:  # python scripts/aero_optimize.py --grid   (~3 min)
         grid()
         sys.exit()
