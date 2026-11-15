@@ -14,3 +14,6 @@ Thumbs.db
 
 # 런처 로그
 launcher/logs/
+
+# Windows 폴더 아이콘 (scripts/set-folder-icon.bat이 만듦)
+desktop.ini
