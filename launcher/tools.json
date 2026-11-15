@@ -11,7 +11,11 @@
       "path": "packages/aero-automation",
       "kind": "console",
       "run": "\"{python}\" -m aero_automation",
-      "requires": ["numpy", "matplotlib", "gmsh"],
+      "requires": [
+        "numpy",
+        "matplotlib",
+        "gmsh"
+      ],
       "install": "\"{python}\" -m pip install -e ."
     },
     {
@@ -24,21 +28,14 @@
       "path": "packages/aerolap",
       "kind": "gui",
       "run": "\"{python}\" -m aerolap.gui",
-      "requires": ["aerolap", "numpy", "scipy", "matplotlib", "yaml"],
+      "requires": [
+        "aerolap",
+        "numpy",
+        "scipy",
+        "matplotlib",
+        "yaml"
+      ],
       "install": "\"{python}\" -m pip install -e ."
-    },
-    {
-      "id": "fsk-lapsim",
-      "name": "FSK-LapSim",
-      "tagline": "FSK 이벤트 기준 랩타임·에너지 평가",
-      "use": "리어윙 등 설계안 후보를 가속·스키드패드·오토크로스·엔듀런스 기준으로 비교해 순위를 매기고 리포트로 남길 때",
-      "detail": "민감도 · ClA×CdA 스윕 · 밸런스 최적화 · 몬테카를로 · HTML 리포트 · 터미널",
-      "status": "사용 중",
-      "path": "packages/fsk-lapsim",
-      "kind": "console",
-      "run": "\"{python}\" -m fsk_lapsim --help",
-      "requires": ["fsk_lapsim", "typer", "scipy", "pydantic"],
-      "install": "\"{python}\" -m pip install -e \".[dev]\""
     },
     {
       "id": "vortex",
