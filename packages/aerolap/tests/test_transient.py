@@ -182,7 +182,7 @@ def test_cli_transient_with_road(tmp_path):
     assert main(["transient", veh, trk, "--coarse", "--iterations", "0", "--road", "A",
                  "--out", str(tmp_path)]) == 0
     assert (tmp_path / "dynamics.png").exists()
-    assert "ISO 8608 class A" in (tmp_path / "transient.txt").read_text()
+    assert "ISO 8608 class A" in (tmp_path / "transient.txt").read_text(encoding="utf-8")
 
 
 def test_roll_dynamics_through_a_change_of_direction(ev_cfg):

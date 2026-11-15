@@ -120,7 +120,7 @@ def test_table_map_reproduces_and_interpolates(tmp_path):
 def test_table_map_rejects_incomplete_grid(tmp_path):
     p = tmp_path / "map.csv"
     _write_grid(p, _linear)
-    lines = p.read_text().splitlines()
+    lines = p.read_text(encoding="utf-8").splitlines()
     p.write_text("\n".join(lines[:-1]) + "\n")
     with pytest.raises(ValueError):
         TableAero.from_csv(p)
@@ -240,3 +240,12 @@ def test_model_level_errors_are_specific(ev_cfg):
     assert "mass.total_kg" in ei.value.paths
     with pytest.raises(ConfigError, match="aero.components.front.span_m"):
         VehicleModel(with_overrides(ev_cfg, {"aero.components": {"front": {"type": "wing", "chord_m": 0.3}}}))
+
+
+def test_simple_component_scale_defaults_to_one():
+    # aero-exchange / aero-split / sweeps read aero.components.<name>.scale: it must exist even if omitted
+    from aerolap.config import apply_defaults, get_path
+
+    cfg = apply_defaults({"aero": {"components": {"body": {"cla": -0.15, "cda": 0.193}, "wing": {"type": "wing"}}}})
+    assert get_path(cfg, "aero.components.body.scale") == 1.0
+    assert "scale" not in cfg["aero"]["components"]["wing"]  # physics devices keep their own variables

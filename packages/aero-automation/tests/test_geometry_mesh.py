@@ -216,8 +216,8 @@ def test_flap_pipeline_end_to_end(tmp_path, capsys):
 
 def test_mesh_failure_marks_cases_failed(tmp_path):
     cfg_path = make_flap_project(tmp_path, gaps="[0.02]")
-    text = cfg_path.read_text().replace("flap1_overlap = 0.01", "flap1_overlap = -0.2")
-    cfg_path.write_text(text)
+    text = cfg_path.read_text(encoding="utf-8").replace("flap1_overlap = 0.01", "flap1_overlap = -0.2")
+    cfg_path.write_text(text, encoding="utf-8")
     assert main(["-c", str(cfg_path), "run"]) == 1
     cfg = load_config(cfg_path)
     status = json.loads((build_cases(cfg)[0].dir / "status.json").read_text(encoding="utf-8"))

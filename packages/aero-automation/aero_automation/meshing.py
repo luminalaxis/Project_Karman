@@ -324,9 +324,12 @@ def _build_gmsh_model(geom: Geometry, s: MeshSettings, bl_thickness: float):
     fld.setNumber(te_ref, "DistMax", grow)
 
     size_fields = [near, wake, te_ref]
-    if ground_y is not None:
-        # 날개와 지면 사이 통로: 지상고의 1/8 크기로 세분화 (날개 아래 지면 구간)
-        h = max(min(float(el.xy[:, 1].min()) for el in geom.elements) - ground_y, 1e-3)
+    h = (max(min(float(el.xy[:, 1].min()) for el in geom.elements) - ground_y, 1e-3)
+         if ground_y is not None else None)
+    if h is not None and h < 1.0:
+        # 날개와 지면 사이 통로: 지상고의 1/8 크기로 세분화 (날개 아래 지면 구간).
+        # 지상고가 메인 코드 이상이면 지면 효과가 작고, 반경 1.2h 영역 전체가 벽 근처 크기로
+        # 채워져 셀 수가 폭증하므로(지상고 2c에서 200만 개) 세분화하지 않음
         xs = np.concatenate([el.xy[:, 0] for el in geom.elements])
         gpts = [geo.addPoint(x, ground_y, 0, lc)
                 for x in np.arange(xs.min() - 0.5, xs.max() + 1.5, min(near_size, h / 8 / f))]

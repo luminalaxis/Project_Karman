@@ -105,4 +105,4 @@ def test_energy_cli_writes_the_temperature_plot(tmp_path):
     assert cli_main(["energy", str(DATA / "vehicles" / "fsk2026_thermal.yaml"), str(FSK_TRACK), "--coarse",
                      "--distance-km", "10", "--out", str(tmp_path)]) == 0
     assert (tmp_path / "thermal.png").exists()
-    assert "cell temperature" in (tmp_path / "energy.txt").read_text()
+    assert "cell temperature" in (tmp_path / "energy.txt").read_text(encoding="utf-8")

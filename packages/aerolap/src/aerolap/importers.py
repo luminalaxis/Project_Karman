@@ -231,13 +231,30 @@ class OlTrack:
     def length(self) -> float:
         return float(self.lengths.sum())
 
-    def segments(self) -> list[tuple[str, float, float, str]]:
+    def segments(self, spiral: bool = False, piece_m: float = 0.1) -> list[tuple[str, float, float, str]]:
+        """Segment list. ``spiral`` = OptimumLap's own reading of the file: a corner followed by a corner
+        turning the same way changes its radius linearly from its own to the next one's (checked against
+        the cornerRadius channel of an OptimumLap result); it is split into ``piece_m`` pieces here.
+        A corner before a straight or a corner the other way keeps a constant radius.
+        Off by default: it reproduces OptimumLap's corner speeds (lap within 0.2 %, scripts/olres_compare.py)
+        but the xy line no longer closes (the file's geometry is the constant-radius one), so track maps,
+        racing lines and smoothing need the default."""
+        n = len(self.lengths)
         out = []
-        for length, r, d in zip(self.lengths, self.radii, self.directions):
+        for i, (length, r, d) in enumerate(zip(self.lengths, self.radii, self.directions)):
             if d == 0 or r <= 0:
                 out.append(("straight", float(length), 0.0, ""))
-            else:
-                out.append(("corner", float(length), float(r), "left" if d > 0 else "right"))
+                continue
+            side = "left" if d > 0 else "right"
+            j = (i + 1) % n if self.closed else i + 1
+            r_next = self.radii[j] if j < n and np.sign(self.directions[j]) == np.sign(d) and self.radii[j] > 0 else r
+            if not spiral or r_next == r:
+                out.append(("corner", float(length), float(r), side))
+                continue
+            k = max(1, int(math.ceil(length / piece_m)))
+            ends = r + (r_next - r) * np.arange(k + 1) / k
+            for r_piece in np.minimum(ends[:-1], ends[1:]):  # tighter end of each piece: OptimumLap's corner
+                out.append(("corner", float(length) / k, float(r_piece), side))  # speed limit uses the end radius
         return out
 
 

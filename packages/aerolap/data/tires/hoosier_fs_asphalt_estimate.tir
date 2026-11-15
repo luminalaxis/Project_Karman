@@ -1,0 +1,88 @@
+[MDI_HEADER]
+FILE_TYPE                = 'tir'
+FILE_VERSION             = 3.0
+FILE_FORMAT              = 'ASCII'
+$ ---------------------------------------------------------------------------------------------------------
+$ HOOSIER FSAE slick on ASPHALT - ESTIMATE built from published data (no TTC data used).
+$ Source: "Tire Model with Temperature Effects for Formula SAE Vehicle", Applied Sciences 2019, 9(24),
+$   5328, doi:10.3390/app9245328 (open access, CC BY 4.0).
+$   Appendix A: Magic Formula file of the FS Team Delft Apollo Vredestein 10" slick, fitted to OUTDOOR
+$   truck measurements on asphalt (Kistler wheel force transducer, Fz 600 / 1000 N).
+$   The same test measured a Hoosier: "peak utilized friction for the Hoosier tire was around 5 % higher
+$   than the Apollo one; the average utilized friction was in the same range" (section 2.1).
+$ -> this file = the paper's coefficients with PDX1 and PDY1 x 1.05 (Hoosier peak). Temperature terms of
+$   the paper are left out (tyre assumed at its reference temperature 50 C). Shape, stiffness and load
+$   sensitivity are the Apollo's: replace with a .tir fitted to TTC data of your Hoosier when available.
+$ ---------------------------------------------------------------------------------------------------------
+[UNITS]
+LENGTH                   = 'meter'
+FORCE                    = 'newton'
+ANGLE                    = 'radians'
+MASS                     = 'kg'
+TIME                     = 'second'
+[MODEL]
+FITTYP                   = 62                $ Magic Formula 6.2 (paper)
+TYRESIDE                 = 'LEFT'
+[DIMENSION]
+UNLOADED_RADIUS          = 0.17
+WIDTH                    = 0.2165
+RIM_RADIUS               = 0.127
+RIM_WIDTH                = 0.225
+ASPECT_RATIO             = 0.1986
+[VERTICAL]
+FNOMIN                   = 600               $ nominal wheel load [N]
+VERTICAL_STIFFNESS       = 95000
+VERTICAL_DAMPING         = 50
+BREFF                    = 8.4
+DREFF                    = 0.27
+FREFF                    = 0.07
+Q_RE0                    = 0.9974
+[SCALING_COEFFICIENTS]
+LFZO                     = 1
+LCX                      = 1
+LMUX                     = 1
+LEX                      = 1
+LKX                      = 1
+LCY                      = 1
+LMUY                     = 1
+LEY                      = 1
+LKY                      = 1
+[LONGITUDINAL_COEFFICIENTS]
+PCX1                     = 1.391
+PDX1                     = 1.60797           $ 1.5314 (Apollo, asphalt) x 1.05 (Hoosier peak)
+PDX2                     = -0.04906          $ mu_x per +100 % load
+PEX1                     = 0.4454
+PEX2                     = 0.2192
+PEX4                     = 0.1665
+PKX1                     = 43.63
+PKX2                     = 4.4735
+PKX3                     = 0.023027
+PHX1                     = -0.003839
+PHX2                     = 0.0044605
+PVX1                     = 0.04359
+PVX2                     = 0.007515
+RBX1                     = 10
+RBX2                     = 6
+RCX1                     = 1
+[LATERAL_COEFFICIENTS]
+PCY1                     = 1.3318
+PDY1                     = 1.73271           $ 1.6502 (Apollo, asphalt) x 1.05 (Hoosier peak)
+PDY2                     = -0.14737          $ mu_y per +100 % load
+PEY1                     = 0.5
+PEY2                     = -9.1214E-7
+PKY1                     = -85
+PKY2                     = 5
+PKY4                     = 1.7923
+PHY1                     = 0.008
+PVY1                     = 0.1
+PVY2                     = -0.001143
+RBY1                     = 16
+RCY1                     = 1
+[ALIGNING_COEFFICIENTS]
+QBZ1                     = 7
+QBZ2                     = 2
+QCZ1                     = 1.2
+QDZ1                     = 0.12
+QDZ2                     = -0.02
+QEZ1                     = -2.8
+QEZ2                     = 3

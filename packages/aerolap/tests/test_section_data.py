@@ -116,3 +116,18 @@ def test_rank_sections(csv_path, component, tmp_path):
     assert again["aero"]["components"][component]["section"] == best.geometry_id
     car = VehicleModel(again)
     assert np.isfinite(float(sum(car.aero.coefficients(0, 35.0, 45.0, 0.0, 0.0)[:2])))
+
+
+def test_single_clearance_and_bookkeeping_columns(tmp_path):
+    # current AERO_AUTOMATION summaries: per-case columns (case, mesh, elapsed_min) are not geometry variables,
+    # and data at ONE ground clearance must interpolate in aoa (was 0 / 0 -> nan)
+    from aerolap.aero.section_data import load_sections
+
+    p = tmp_path / "summary.csv"
+    rows = ["case,mesh,elapsed_min,state,conv_state,main_airfoil,main_chord,aoa,ground_clearance,speed_kmh,cl,cd"]
+    for a, cl in ((-4, 4.0), (0, 5.0), (4, 6.0)):
+        rows.append(f"c{a},m{a},{6 + a},done,converged,4412,175,{a},80,70,{cl},0.1")
+    p.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    sec = load_sections(p).select(None)
+    assert float(sec.cl_at(2.0, 80.0, 70.0)) == pytest.approx(5.5)
+    assert float(sec._fast("cl", 2.0, 75.0, 70.0)) == pytest.approx(5.5)

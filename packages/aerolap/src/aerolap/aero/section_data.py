@@ -28,7 +28,9 @@ import numpy as np
 CONDITIONS = ("aoa", "ground_clearance", "speed_kmh")
 NOT_GEOMETRY = {"name", "group", "geom", "state", "conv_state", "conv_reason", "aoa", "speed_kmh",
                 "ground_clearance", "chord", "velocity", "reynolds", "mach", "density", "flow_angle", "downforce",
-                "base_case", "iterations", "ground_ref", "SYNTHETIC_NOT_CFD", "avg_iters", "yplus-max", "yplus-avg"}
+                "base_case", "iterations", "ground_ref", "SYNTHETIC_NOT_CFD", "avg_iters", "yplus-max", "yplus-avg",
+                # per-case bookkeeping of current AERO_AUTOMATION summaries (one value per row, never a geometry)
+                "case", "mesh", "geometry", "elapsed_min", "iter_done", "report_units"}
 BAD_CONV = {"diverged", "no_data"}
 
 
@@ -136,6 +138,8 @@ class SectionPolar:
         a = np.clip(np.asarray(aoa, dtype=float), self.aoa[0], self.aoa[-1])
         if self.heights is None:
             return np.interp(a, self.aoa, tab)
+        if len(self.heights) == 1:  # one ground clearance in the data: no height interpolation (was 0 / 0)
+            return np.interp(a, self.aoa, tab[:, 0]) + 0.0 * np.asarray(h if h is not None else 0.0, dtype=float)
         hh = np.clip(np.asarray(self.heights.mean() if h is None else h, dtype=float), self.heights[0], self.heights[-1])
         a, hh = np.broadcast_arrays(a, hh)
         i = np.clip(np.searchsorted(self.aoa, a) - 1, 0, len(self.aoa) - 2)

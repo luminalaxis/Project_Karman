@@ -79,6 +79,7 @@ py -m aerolap.gui
 차량 파일에 모르는 키(오타)가 있으면 로그 창(명령줄은 stderr)에 비슷한 이름과 함께 경고가 나옵니다.
 
 **26년도 차·FSK 트랙 결과 모음: [docs/results_fsk2026.md](docs/results_fsk2026.md)**
+**MEF7 공력 목표(MIP 228MV FD4 · V6 FIXED 트랙): [docs/results_mef7_v6.md](docs/results_mef7_v6.md)**
 
 ## 빠른 시작
 
@@ -150,6 +151,9 @@ aerolap optimize data/optimize/cornering_setup.yaml
 | `fit-map CFD.csv` | CFD 산발점에 2차 응답면 피팅, 격자 맵으로 내보내기(`--export-grid`) | R², rms |
 | `line VEHICLE TRACK` | **레이싱 라인**: 트랙 폭 안에서 최소 곡률 + 경로 길이 라인을 QSS 랩타임으로 골라 트랙 CSV로 (`--width`, `--car-width`, `--clearance`) | `racing_line.csv`, `.txt`, `.png`, `trace.csv` |
 | `tire FILE.tir` 또는 `tire VEHICLE` | Magic Formula 타이어 점검: 하중별 μ·코너링 강성·피크 슬립각, 캠버 최적, 복합 슬립 (`--pressure`, `--mu-x/--mu-y`) | `tire.txt`, `tire.png` |
+| `score BASE.yaml VAR.yaml ...` | 종목 시간 → 대회 점수, BASE 대비 점수 차이 (`--autocross`, `--endurance`, `--scoring FSK규정.yaml`; 기본 공식은 FS식 **자리표시자**) | `score.txt` |
+| `mc CAND.yaml ... --track T` | **몬테카를로 순위 신뢰도**: 후보별 CFD 오차(`--own aero.cla_scale=0.05`, 기본)와 공통 가정 오차(`--shared tires.mu_y=0.03`)를 넣어 P(1위), 순위 유지, 쌍별 역전 확률 (`--objective endurance_time`, `--n 100`) | `mc.txt`, `samples.csv` |
+| `gps LOG.nmea` | GPS 로거(NMEA RMC) → 랩 분할·랩타임, 주행 라인을 트랙 CSV로(`--track-out`), 시뮬레이션 `trace.csv`와 속도 비교(`--trace`) | `gps.txt`, `gps_vs_sim.png` |
 
 공통 옵션:
 
