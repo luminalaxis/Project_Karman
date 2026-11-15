@@ -66,7 +66,7 @@ def test_build_cases_grouping_and_derived(tmp_path):
 
 def test_duplicate_case_names_rejected(tmp_path):
     path = make_project(tmp_path)
-    path.write_text(path.read_text().replace('name = "M{mach}_AoA{aoa}"', 'name = "M{mach}"'))
+    path.write_text(path.read_text(encoding="utf-8").replace('name = "M{mach}_AoA{aoa}"', 'name = "M{mach}"'))
     with pytest.raises(ConfigError, match="중복"):
         build_cases(load_config(path))
 
@@ -91,12 +91,12 @@ def test_run_status_collect(tmp_path, capsys):
     assert main(["-c", str(cfg_path), "run", "-j", "2"]) == 1  # 실패 케이스 포함
 
     cfg = load_config(cfg_path)
-    states = {c.name: json.loads((c.dir / "status.json").read_text())["state"] for c in build_cases(cfg)}
+    states = {c.name: json.loads((c.dir / "status.json").read_text(encoding="utf-8"))["state"] for c in build_cases(cfg)}
     assert states["M0.3_AoA4"] == "done"
     assert states["M0.3_AoA99"] == "failed"   # 로그의 "Divergence detected"
     assert states["M0.3_AoA-99"] == "failed"  # 종료 코드 3
 
-    journal = (cfg.output_dir / "M0.5" / "M0.5_AoA4" / "run.jou").read_text()
+    journal = (cfg.output_dir / "M0.5" / "M0.5_AoA4" / "run.jou").read_text(encoding="utf-8")
     assert "AOA=4 MACH=0.5 FX=0.9976" in journal
     assert "/solve/iterate 200" in journal
 
@@ -113,13 +113,13 @@ def test_run_status_collect(tmp_path, capsys):
 
 def test_timeout_marks_failed(tmp_path):
     cfg_path = make_project(tmp_path, sweep="aoa = [0]")
-    text = cfg_path.read_text().replace(
+    text = cfg_path.read_text(encoding="utf-8").replace(
         '[constants]', 'timeout_minutes = 0.002\n\n[constants]'
     ).replace(f'"{FAKE_SOLVER.as_posix()}", "${{journal}}"', '"-c", "import time; time.sleep(30)"')
-    cfg_path.write_text(text)
+    cfg_path.write_text(text, encoding="utf-8")
     assert main(["-c", str(cfg_path), "run", "--only", "M0.3_AoA0"]) == 1
     cfg = load_config(cfg_path)
-    status = json.loads((build_cases(cfg)[0].dir / "status.json").read_text())
+    status = json.loads((build_cases(cfg)[0].dir / "status.json").read_text(encoding="utf-8"))
     assert status["state"] == "failed" and "시간 초과" in status["message"]
 
 
@@ -130,7 +130,7 @@ def test_ctrl_c_stops_parallel_run(tmp_path):
     예전에는 작업 스레드가 Ctrl+C를 받지 못해, 남은 케이스를 끝까지 다 돌린 뒤에야 멈췄다.
     """
     cfg_path = make_project(tmp_path, sweep="aoa = [0, 1, 2, 3]")  # 8 케이스
-    cfg_path.write_text(cfg_path.read_text().replace(
+    cfg_path.write_text(cfg_path.read_text(encoding="utf-8").replace(
         f'"{FAKE_SOLVER.as_posix()}", "${{journal}}"', '"-c", "import time; time.sleep(60)"'))
     cfg = load_config(cfg_path)
     cases = build_cases(cfg)
@@ -141,7 +141,7 @@ def test_ctrl_c_stops_parallel_run(tmp_path):
             path = c.dir / "status.json"
             if path.is_file():
                 try:
-                    out[c.name] = json.loads(path.read_text())["state"]
+                    out[c.name] = json.loads(path.read_text(encoding="utf-8"))["state"]
                 except json.JSONDecodeError:  # 쓰는 중
                     pass
         return out

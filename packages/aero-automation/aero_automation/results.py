@@ -97,6 +97,8 @@ def summarize_case(cfg: ProjectConfig, case: Case) -> dict:
     row["elapsed_min"] = round(status["elapsed_sec"] / 60, 2) if status.get("elapsed_sec") else ""
     files = sorted({p for pattern in cfg.results.report_files for p in case.dir.glob(pattern)})
     reports = [(path, *parse_report_file(path)) for path in files]
+    if cfg.results.report_units == "N":
+        reports = [(path, headers, _force_to_coefficient(headers, data, row)) for path, headers, data in reports]
     angle = row.get("flow_angle", row.get(cfg.results.x_param))
     history = next((h for h in (coefficient_history(headers, data, angle, bool(row.get("downforce")))
                                 for _, headers, data in reports) if h is not None), None)
@@ -125,6 +127,16 @@ def summarize_case(cfg: ProjectConfig, case: Case) -> dict:
         row["l/d"] = row["cl"] / row["cd"]
     _forces_per_span(row)
     return row
+
+
+def _force_to_coefficient(headers: list[str], data: list[list[float]], row: dict) -> list[list[float]]:
+    """Force 리포트(N, 단위 폭당)의 cx*/cy* 열을 계수로: / (0.5 rho velocity^2 chord)."""
+    v, c = row.get("velocity"), row.get("chord")
+    if not isinstance(v, (int, float)) or not isinstance(c, (int, float)) or not v or not c:
+        raise ValueError(f"{row.get('case')}: report_units = 'N' needs case variables velocity and chord")
+    qc = 0.5 * row.get("density", 1.225) * v**2 * c
+    cols = [i for i, h in enumerate(headers) if h.lower().startswith(("cx", "cy"))]
+    return [[x / qc if i in cols else x for i, x in enumerate(r)] for r in data]
 
 
 def _forces_per_span(row: dict) -> None:

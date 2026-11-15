@@ -175,10 +175,10 @@ def test_spot_check_warning_end_to_end_single_speed(tmp_path):
     from aero_automation.screening import load_selection
 
     cfg_path = make_project(tmp_path)
-    text = cfg_path.read_text()
+    text = cfg_path.read_text(encoding="utf-8")
     text = text.replace('mach = 0.15\n', 'mach = 0.15\nspeed_kmh = 60\n')
     text = text.replace('objective = "max_ld"', 'objective = "max_cl"\nsplit_by = ["speed_kmh"]')
-    cfg_path.write_text(text)
+    cfg_path.write_text(text, encoding="utf-8")
     cfg = load_config(cfg_path)
     cases = build_cases(cfg)
     screen(cfg, cases, log=lambda *_: None)
@@ -206,7 +206,7 @@ def test_spot_check_warning_end_to_end_single_speed(tmp_path):
 def test_screen_per_speed(tmp_path):
     """속도별로 Re/Mach가 달라지고, 선별/그래프가 속도마다 따로 만들어진다."""
     cfg_path = make_project(tmp_path)
-    text = cfg_path.read_text()
+    text = cfg_path.read_text(encoding="utf-8")
     text = text.replace('mach = 0.15\n', 'chord = 0.1157\n')
     text = text.replace('name = "{main_airfoil}_g{flap1_gap}_a{aoa}"', 'name = "{main_airfoil}_g{flap1_gap}_v{speed_kmh}_a{aoa}"')
     text = text.replace('aoa = [0, 8, 16, 24]', 'aoa = [0, 8, 16, 24]\nspeed_kmh = [40, 100]')
@@ -220,7 +220,7 @@ reynolds = 1e5
 
 [screening]''')
     text = text.replace('objective = "max_ld"', 'objective = "max_ld"\nsplit_by = ["speed_kmh"]')
-    cfg_path.write_text(text)
+    cfg_path.write_text(text, encoding="utf-8")
     cfg = load_config(cfg_path)
     cases = build_cases(cfg)
 
@@ -263,7 +263,7 @@ def test_ranking_per_condition(tmp_path):
 def test_chord_sweep_meshes_and_forces(tmp_path):
     """코드 길이를 스윕하면 코드별로 메쉬가 따로 생기고, Re는 속도·코드로 계산된다."""
     cfg_path = make_project(tmp_path)
-    text = cfg_path.read_text()
+    text = cfg_path.read_text(encoding="utf-8")
     text = text.replace('mach = 0.15\n', '')
     text = text.replace('aoa = [0, 8, 16, 24]', 'aoa = [0, 8]\nspeed_kmh = [40, 100]\nchord = [0.1, 0.2]')
     text = text.replace('name = "{main_airfoil}_g{flap1_gap}_a{aoa}"',
@@ -276,7 +276,7 @@ reynolds = "1.225 * velocity * chord / 1.7894e-5"
 [mesh]
 
 [screening]''')
-    cfg_path.write_text(text)
+    cfg_path.write_text(text, encoding="utf-8")
     cfg = load_config(cfg_path)
     cases = build_cases(cfg)
 
