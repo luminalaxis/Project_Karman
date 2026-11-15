@@ -738,6 +738,90 @@ def cmd_fit_map(args) -> int:
     return 0
 
 
+def cmd_score(args) -> int:
+    from .analysis.scoring import PLACEHOLDER, points_table
+    from .config import load_yaml
+
+    formulas = load_yaml(args.scoring)["events"] if args.scoring else PLACEHOLDER
+    auto = Track.from_file(args.autocross) if args.autocross else None
+    endu = Track.from_file(args.endurance, closed=True) if args.endurance else None
+    rows = []
+    for path in args.vehicles:
+        car = VehicleModel(load_vehicle_config(path), features_for_level(args.level))
+        ev = run_events(car, auto, endu, args.distance_km, _opts(args))
+        times = {e.name: e.time_s for e in ev}
+        energy = next((e.energy_kWh for e in ev if e.name == "endurance"), None)
+        rows.append((Path(path).stem, times, energy))
+        print(f"{Path(path).stem}: " + ", ".join(f"{k} {v:.3f} s" for k, v in times.items()))
+    text = points_table(rows, formulas, placeholder=not args.scoring)
+    print("\n" + text)
+    _write(_out(args, "out/score") / "score.txt", text)
+    return 0
+
+
+def cmd_mc(args) -> int:
+    from .analysis.montecarlo import DEFAULT_OWN, monte_carlo
+
+    def sig(items):
+        return {k: float(v) for k, v in (s.split("=", 1) for s in items)}
+
+    spec = {"type": args.objective, "track": str(Path(args.track).resolve()), "level": args.level,
+            "distance_km": args.distance_km}
+    cfgs = {Path(p).stem: load_vehicle_config(p) for p in args.vehicles}
+    own = sig(args.own) if args.own else DEFAULT_OWN
+    shared = sig(args.shared or [])
+    print(f"{len(cfgs)} candidates x {args.n} samples; shared {shared or '-'}; own {own}")
+    r = monte_carlo(cfgs, spec, n=args.n, shared=shared, own=own, seed=args.seed, workers=args.workers)
+    text = r.report(f"{args.objective} ({Path(args.track).name}, {args.level}); sigma shared {shared or '-'}, "
+                    f"own {own}", "s")
+    print(text)
+    out = _out(args, "out/mc")
+    _write(out / "mc.txt", text)
+    np.savetxt(out / "samples.csv", r.samples, delimiter=",", header=",".join(r.names), comments="")
+    return 0
+
+
+def cmd_gps(args) -> int:
+    from .gps import compare_speed, parse_nmea, split_laps, write_track_csv
+
+    fixes = parse_nmea(Path(args.log).read_text(encoding="utf-8", errors="replace").splitlines())
+    gate = tuple(float(v) for v in args.gate.split(",")) if args.gate else None
+    laps = split_laps(fixes, gate, args.radius, args.min_lap_m)
+    lines = [f"{len(fixes)} fixes, {fixes[-1, 0]:.0f} s, {len(laps)} laps (gate radius {args.radius:g} m)",
+             f"{'lap':>4s} {'time [s]':>9s} {'length [m]':>11s} {'v max [km/h]':>13s}"]
+    lines += [f"{i:4d} {lap.time_s:9.2f} {lap.s[-1]:11.1f} {np.nanmax(lap.v) * 3.6:13.1f}" for i, lap in enumerate(laps)]
+    if not laps:
+        print("\n".join(lines) + "\nno complete lap: check --gate / --radius")
+        return 1
+    k = args.lap if args.lap is not None else int(np.argmin([lap.time_s for lap in laps]))
+    lap = laps[k]
+    lines.append(f"\nusing lap {k} ({lap.time_s:.2f} s)")
+    out = _out(args, "out/gps")
+    if args.track_out:
+        write_track_csv(lap, args.track_out, f"GPS lap {k}")
+        lines.append(f"driven line written: {args.track_out} (use as a track)")
+    if args.trace:
+        tr = np.genfromtxt(args.trace, delimiter=",", names=True)
+        f, vg, vs, rms, bias = compare_speed(lap, tr["s_m"], tr["v_mps"])
+        lines.append(f"sim vs GPS speed: RMS {rms * 3.6:.2f} km/h, mean (sim - GPS) {bias * 3.6:+.2f} km/h, "
+                     f"lap {tr['t_s'][-1]:.2f} s sim vs {lap.time_s:.2f} s GPS")
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.plot(f * lap.s[-1], vg * 3.6, label=f"GPS lap {k} ({lap.time_s:.2f} s)")
+        ax.plot(f * lap.s[-1], vs * 3.6, label=f"simulation ({tr['t_s'][-1]:.2f} s)")
+        ax.set(xlabel="distance [m] (GPS lap length)", ylabel="speed [km/h]")
+        ax.legend()
+        ax.grid(alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(out / "gps_vs_sim.png", dpi=130)
+        plt.close(fig)
+    text = "\n".join(lines)
+    print(text)
+    _write(out / "gps.txt", text)
+    return 0
+
+
 # ---------------------------------------------------------------------- parser
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="aerolap", description=(
@@ -835,6 +919,45 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--endurance", help="endurance track CSV (closed, flying laps)")
     sp.add_argument("--distance-km", type=float, default=22.0, help="endurance distance")
     sp.set_defaults(func=cmd_events)
+
+    sp = sub.add_parser("score", help="event times -> competition points; points difference vs the first car")
+    sp.add_argument("vehicles", nargs="+", help="vehicle YAML / .olveh files; the first is the base (references)")
+    sp.add_argument("--autocross", help="autocross track CSV (standing start)")
+    sp.add_argument("--endurance", help="endurance track CSV (closed, flying laps)")
+    sp.add_argument("--distance-km", type=float, default=22.0, help="endurance distance")
+    sp.add_argument("--scoring", help="YAML with 'events:' formulas (default: FS-style placeholder)")
+    sp.add_argument("--level", default="full", help="model level L0 ... L5/full")
+    sp.add_argument("--out", help="output directory")
+    sp.add_argument("--ds", type=float, help="track step [m]")
+    sp.add_argument("--coarse", action="store_true", help="faster, slightly less accurate envelope")
+    sp.set_defaults(func=cmd_score)
+
+    sp = sub.add_parser("mc", help="Monte Carlo: probability that the candidates keep their order under errors")
+    sp.add_argument("vehicles", nargs="+", help="candidate vehicle YAML / .olveh files")
+    sp.add_argument("--track", required=True, help="track CSV")
+    sp.add_argument("--objective", choices=["lap_time", "endurance_time"], default="endurance_time")
+    sp.add_argument("--distance-km", type=float, default=22.0, help="endurance_time distance")
+    sp.add_argument("--n", type=int, default=100, help="samples")
+    sp.add_argument("--shared", action="append", metavar="PATH=SIGMA",
+                    help="relative 1-sigma error common to all candidates, e.g. tires.mu_y=0.03 (repeatable)")
+    sp.add_argument("--own", action="append", metavar="PATH=SIGMA",
+                    help="independent relative error per candidate (default aero.cla_scale=0.05, aero.cda_scale=0.05)")
+    sp.add_argument("--seed", type=int, default=1)
+    sp.add_argument("--workers", type=int, help="processes (default: CPU count)")
+    sp.add_argument("--level", default="full", help="model level L0 ... L5/full")
+    sp.add_argument("--out", help="output directory")
+    sp.set_defaults(func=cmd_mc)
+
+    sp = sub.add_parser("gps", help="NMEA GPS log -> laps, driven-line track, measured vs simulated speed")
+    sp.add_argument("log", help="NMEA text log ($GPRMC / $GNRMC sentences)")
+    sp.add_argument("--gate", metavar="LAT,LON", help="start gate position (default: first fix)")
+    sp.add_argument("--radius", type=float, default=15.0, help="gate radius [m]")
+    sp.add_argument("--min-lap-m", type=float, default=200.0, help="ignore shorter 'laps'")
+    sp.add_argument("--lap", type=int, help="lap index to use (default: fastest)")
+    sp.add_argument("--trace", help="aerolap trace.csv to compare speeds with")
+    sp.add_argument("--track-out", help="write the lap's driven line as a track CSV")
+    sp.add_argument("--out", help="output directory")
+    sp.set_defaults(func=cmd_gps)
 
     sp = sub.add_parser("energy", help="endurance energy budget: battery, drag share, power cap")
     common(sp, track=True)
