@@ -128,13 +128,13 @@ class GGV:
         hi = r1[j] + (r1[j + 1] - r1[j]) * u
         return lo + (hi - lo) * t
 
-    def acc_at(self, v: float, ay: float) -> float:
+    def acc_at(self, v: float, ay: float, _i=None) -> float:
         return self._lookup(self._acc, v, ay)
 
-    def brk_at(self, v: float, ay: float) -> float:
+    def brk_at(self, v: float, ay: float, _i=None) -> float:
         return self._lookup(self._brk, v, ay)
 
-    def coast_at(self, v: float, ay: float) -> float:
+    def coast_at(self, v: float, ay: float, _i=None) -> float:
         return self._lookup(self._coast, v, ay)
 
     # ---------------------------------------------------------- vector lookups
@@ -186,7 +186,66 @@ class GGV:
         return lo + (hi - lo) * t
 
 
-def compute_ggv(vehicle, mode: int, opts: SolverOptions | None = None) -> GGV:
+class GravityGGV:
+    """Envelopes of one aero mode at several normal-gravity scales, interpolated in the scale."""
+
+    def __init__(self, scales, ggvs):
+        self.scales = list(scales)
+        self.ggvs = list(ggvs)
+        self.mode = ggvs[0].mode
+        self.v = ggvs[0].v
+        self.v_max = ggvs[0].v_max
+
+    def _pair(self, lam: float):
+        sc = self.scales
+        if lam <= sc[0]:
+            return 0, 0, 0.0
+        if lam >= sc[-1]:
+            return len(sc) - 1, len(sc) - 1, 0.0
+        j = 0
+        while sc[j + 1] < lam:
+            j += 1
+        return j, j + 1, (lam - sc[j]) / (sc[j + 1] - sc[j])
+
+    def lookup(self, which: str, v: float, ay: float, lam: float) -> float:
+        i, j, t = self._pair(lam)
+        a = getattr(self.ggvs[i], which + "_at")(v, ay)
+        if t == 0.0:
+            return a
+        return a + (getattr(self.ggvs[j], which + "_at")(v, ay) - a) * t
+
+    def apex_speed(self, kappa, sin_b, cos_b, kv, v_cap=None) -> np.ndarray:
+        """Highest speed reachable from below where the tyres hold the corner: |v^2 kappa cos(phi) -
+        g sin(phi)| <= ay_max(v, scale(v)), scale = cos(phi) + v^2 (kappa sin(phi) + kv) / g."""
+        g0 = 9.80665
+        vg = np.linspace(self.v[0], self.v_max, 4 * len(self.v))[None, :]
+        k, sb, cb, kvv = (np.asarray(x, dtype=float)[:, None] for x in (kappa, sin_b, cos_b, kv))
+        lam = cb + vg ** 2 * (k * sb + kvv) / g0
+        need = np.abs(vg ** 2 * k * cb - g0 * sb)
+        sc = np.asarray(self.scales)
+        tab = np.stack([np.interp(vg[0], g.v, g.ay_max) for g in self.ggvs])  # (n_scales, n_v)
+        lam_c = np.clip(lam, sc[0], sc[-1])
+        jj = np.clip(np.searchsorted(sc, lam_c) - 1, 0, max(len(sc) - 2, 0))
+        if len(sc) > 1:
+            t = (lam_c - sc[jj]) / (sc[jj + 1] - sc[jj])
+            cols = np.arange(vg.shape[1])[None, :]
+            have = tab[jj, cols] + (tab[jj + 1, cols] - tab[jj, cols]) * t
+        else:
+            have = np.broadcast_to(tab[0][None, :], need.shape)
+        bad = need > have
+        first = np.where(bad.any(axis=1), np.argmax(bad, axis=1), vg.shape[1])
+        out = np.where(first == 0, vg[0, 0], vg[0, np.maximum(first - 1, 0)])
+        out = np.where(first >= vg.shape[1], self.v_max, out)
+        return out
+
+
+def compute_ggv(vehicle, mode: int, opts: SolverOptions | None = None, g_scale: float = 1.0) -> GGV:
+    if g_scale != 1.0:  # envelope of the car under scaled normal gravity (banked road, crest / dip)
+        old, vehicle.gs = vehicle.gs, float(g_scale)
+        try:
+            return compute_ggv(vehicle, mode, opts)
+        finally:
+            vehicle.gs = old
     opts = opts or SolverOptions()
     v_hi = min(vehicle.powertrain.v_max + 2.0 * opts.v_step, 120.0)
     v = np.arange(opts.v_min, v_hi + 0.5 * opts.v_step, opts.v_step)

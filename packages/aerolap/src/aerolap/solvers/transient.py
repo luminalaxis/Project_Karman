@@ -365,6 +365,13 @@ class TransientSolver:
         grade = trk.interval_grade()
         g_list = [0.0] * len(a_path) if grade is None else (G * grade).tolist()
         a_int = [a + gg for a, gg in zip(a_path, g_list)]
+        # banked / undulating road: per interval sin / cos of the bank and vertical curvature
+        road3d = trk.is_3d
+        if road3d:
+            sb_n, cb_n, kv_n = trk.gravity_terms()
+            sb_l = (0.5 * (sb_n[1:] + sb_n[:-1])).tolist()
+            cb_l = (0.5 * (cb_n[1:] + cb_n[:-1])).tolist()
+            kv_l = (0.5 * (kv_n[1:] + kv_n[:-1])).tolist()
         v2_list = (v_ref ** 2).tolist()
         open_ref = _flap_command(ref, strat) if active else np.zeros(len(ref.s))
         crr = car.tire.rolling_resistance
@@ -553,6 +560,14 @@ class TransientSolver:
                 fy_dem = (abs(fyf), abs(fyr))
             else:
                 ay_act = v * v * kap
+            g_bank = 0.0
+            if road3d:  # the bank carries part of the lateral load; normal gravity scales the loads
+                g_bank = G * sb_l[idx]
+                lam_g = cb_l[idx] + v * v * (kap * sb_l[idx] + kv_l[idx]) / G
+                if not dyn:
+                    ay_act = v * v * kap * cb_l[idx] - g_bank
+                df_f += (lam_g - 1.0) * car.m * G * car.b / car.L  # extra normal load like downforce at the CG
+                df_r += (lam_g - 1.0) * car.m * G * car.a / car.L
             ay = abs(ay_act)
 
             # driver command: jerk-limited, then limited by tyres / powertrain at the current loads
@@ -684,7 +699,7 @@ class TransientSolver:
             spin = 0.0
             if dyn:
                 # lateral / yaw dynamics and the motion relative to the line (Frenet frame)
-                vy += (ay_act - vx * yaw_rate) * dt
+                vy += (ay_act + g_bank - vx * yaw_rate) * dt
                 # drive yaw moment (LSD / torque vectoring) acts into the turn the car is making
                 mz_v = g["mz_drive"] * sgn + fs_v * car.side_lever
                 yaw_rate += (car.a * fyf - car.b * fyr + mz_v) / car.I_yaw * dt

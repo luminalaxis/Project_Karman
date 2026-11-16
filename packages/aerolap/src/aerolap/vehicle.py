@@ -147,8 +147,7 @@ class VehicleModel:
                               hint="스프링·ARB를 키우거나 무게중심을 낮추세요")
         self._k_roll_eff = k_eff
 
-        self.W_f = self.m * G * self.b / self.L
-        self.W_r = self.m * G * self.a / self.L
+        self.gs = 1.0  # normal-gravity scale (bank / vertical curvature), scalar or per-state array
 
         # Transient-only parameters: sprung-mass inertias and damping.
         t_avg = 0.5 * (self.front.track + self.rear.track)
@@ -192,6 +191,15 @@ class VehicleModel:
         """Friction factor of the tyre temperature window, ``max(min, 1 - ((T - opt) / width)^2)``."""
         opt, width, lo = self.grip_window
         return np.maximum(lo, 1.0 - ((np.asarray(temp_c, dtype=float) - opt) / width) ** 2)
+
+    @property
+    def W_f(self):
+        """Static front axle load (N), scaled by the normal-gravity factor ``gs``."""
+        return self.m * G * self.gs * self.b / self.L
+
+    @property
+    def W_r(self):
+        return self.m * G * self.gs * self.a / self.L
 
     # ------------------------------------------------------------------ info
     @property
@@ -351,7 +359,7 @@ class VehicleModel:
         hf0 = 0.0 if rh_f is None else fr.static_ride_height - np.asarray(rh_f)
         hr0 = 0.0 if rh_r is None else rr.static_ride_height - np.asarray(rh_r)
         comp = self.load_components(ax, ay, df_f, df_r, drag, roll, hf0, hr0)
-        k_eff = self.K_f + self.K_r - self.m_s * G * comp["d_roll"]
+        k_eff = self.K_f + self.K_r - self.m_s * G * self.gs * comp["d_roll"]
         roll_new = comp["m_roll"] / k_eff
         heave_f = comp["el_f"] / fr.heave_stiffness
         heave_r = comp["el_r"] / rr.heave_stiffness
@@ -390,7 +398,7 @@ class VehicleModel:
         fr, rr = self.front, self.rear
         kt_f, kt_r = 0.5 * fr.tire_rate * fr.track ** 2, 0.5 * rr.tire_rate * rr.track ** 2
         el_f, el_r, m_roll = comp["el_f"], comp["el_r"], comp["m_roll"]
-        grav = self.m_s * G * comp["d_roll"]
+        grav = self.m_s * G * self.gs * comp["d_roll"]
         defl_f = (df_f - comp["d_long"]) / (2.0 * fr.tire_rate)  # tyre deflection change (plank excluded)
         defl_r = (df_r + comp["d_long"]) / (2.0 * rr.tire_rate)
 
@@ -629,8 +637,16 @@ class VehicleModel:
         return state, new_attitude
 
     def solve_state(self, v, ax, ay, mode: int | None = None, init: VehicleState | None = None,
-                    max_iter: int = 40, tol: float = 1e-5, relax: float = 1.0) -> VehicleState:
-        """Quasi-static equilibrium: aero <-> loads <-> ride heights / roll / yaw fixed point."""
+                    max_iter: int = 40, tol: float = 1e-5, relax: float = 1.0, g_scale=None) -> VehicleState:
+        """Quasi-static equilibrium: aero <-> loads <-> ride heights / roll / yaw fixed point.
+
+        ``g_scale`` (scalar or per state) scales the normal gravity: banked road, crests and dips."""
+        if g_scale is not None:
+            old, self.gs = self.gs, np.asarray(g_scale, dtype=float)
+            try:
+                return self.solve_state(v, ax, ay, mode, init, max_iter, tol, relax)
+            finally:
+                self.gs = old
         mode = self.default_mode if mode is None else mode
         v, ax, ay = (np.array(x, dtype=float) for x in np.broadcast_arrays(
             np.asarray(v, dtype=float), np.asarray(ax, dtype=float), np.abs(np.asarray(ay, dtype=float))))

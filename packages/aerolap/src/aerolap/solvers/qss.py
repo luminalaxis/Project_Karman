@@ -9,7 +9,7 @@ import numpy as np
 from ..aero.strategy import StrategyConfig
 from ..vehicle import G, LIMIT_NAMES, VehicleModel
 from .base import LapResult, powertrain_channels
-from .ggv import GGV, SolverOptions, compute_ggv
+from .ggv import GGV, GravityGGV, SolverOptions, compute_ggv
 
 
 class QSSSolver:
@@ -20,11 +20,21 @@ class QSSSolver:
         self._cache: dict[tuple[int, int], GGV] = {}
 
     # ------------------------------------------------------------------ envelope
-    def ggv(self, vehicle: VehicleModel, mode: int) -> GGV:
-        key = (id(vehicle), mode)
+    def ggv(self, vehicle: VehicleModel, mode: int, g_scale: float = 1.0) -> GGV:
+        key = (id(vehicle), mode, round(g_scale, 4))
         if key not in self._cache:
-            self._cache[key] = compute_ggv(vehicle, mode, self.opts)
+            self._cache[key] = compute_ggv(vehicle, mode, self.opts, g_scale)
         return self._cache[key]
+
+    def gravity_ggv(self, vehicle: VehicleModel, mode: int, trk) -> GravityGGV:
+        """Envelopes over the range of normal-gravity scales the track can need (bank, crests, dips)."""
+        sb, cb, kv = trk.gravity_terms()
+        vmax = vehicle.powertrain.v_max
+        reach = vmax * vmax * (np.abs(trk.kappa) * np.abs(sb) + np.abs(kv)) / G
+        lo = float(np.clip(np.min(cb - reach), 0.3, 1.0))
+        hi = float(np.clip(np.max(cb + reach), 1.0, 2.5))
+        scales = sorted({1.0, *np.round(np.arange(lo, hi + 1e-9, 0.15), 3).tolist(), round(hi, 3), round(lo, 3)})
+        return GravityGGV(scales, [self.ggv(vehicle, mode, s) for s in scales])
 
     # ------------------------------------------------------------------ main
     def solve(self, vehicle: VehicleModel, track, start: str = "flying",
@@ -41,6 +51,10 @@ class QSSSolver:
         strat = vehicle.active_strategy()
         modes_needed = sorted({strat.closed_mode, strat.open_mode})
         ggvs = {m: self.ggv(vehicle, m) for m in modes_needed}
+        road3d = None
+        if trk.is_3d:  # bank / vertical curvature: envelopes at several gravity scales
+            ggvs3 = {m: self.gravity_ggv(vehicle, m, trk) for m in modes_needed}
+            road3d = (ggvs3, *trk.gravity_terms())
 
         ds = np.diff(trk.s)
         k_int = trk.interval_kappa()
@@ -57,6 +71,8 @@ class QSSSolver:
             ds = np.concatenate([ds, ds, ds])
             if g_int is not None:
                 g_int = np.concatenate([g_int, g_int, g_int])
+            if road3d is not None:
+                road3d = (road3d[0],) + tuple(np.concatenate([a[:-1], a[:-1], a]) for a in road3d[1:])
             lo, hi = n, 2 * n
         else:
             k_node = trk.kappa.copy()
@@ -64,6 +80,14 @@ class QSSSolver:
         s_all = np.concatenate([[0.0], np.cumsum(ds)])
         v0 = 0.0 if start == "standing" else None
         geo = _Geometry(s_all, ds, k_node, k_int, cap, g_int)
+        if road3d is not None:
+            ggvs3, sb, cb, kv = road3d
+            geo.road3d = ggvs3
+            geo.sb, geo.cb, geo.kv = sb, cb, kv
+            mid = 0.5  # interval values: mean of the two nodes
+            geo.sb_i = (mid * (sb[1:] + sb[:-1])).tolist()
+            geo.cb_i = (mid * (cb[1:] + cb[:-1])).tolist()
+            geo.kv_i = (mid * (kv[1:] + kv[:-1])).tolist()
 
         shift = _ShiftModel(vehicle)
         if strat.type == "fixed":
@@ -107,7 +131,12 @@ class QSSSolver:
         k_abs = np.abs(geo.k_node)
         n_nodes = len(k_abs)
         mode_keys = list(ggvs)
-        apex_all = np.stack([ggvs[m].apex_speed(k_abs) for m in mode_keys])
+        g3 = geo.road3d
+        if g3 is not None:  # bank / crest / dip: apex limits and lookups at the local gravity scale
+            apex_all = np.stack([g3[m].apex_speed(geo.k_node, geo.sb, geo.cb, geo.kv) for m in mode_keys])
+            ggvs = {m: _Road3D(g3[m], geo) for m in mode_keys}
+        else:
+            apex_all = np.stack([ggvs[m].apex_speed(k_abs) for m in mode_keys])
         if modes is None:
             best = np.argmax(apex_all, axis=0)
             v_lim = apex_all[best, np.arange(n_nodes)]
@@ -121,7 +150,7 @@ class QSSSolver:
             node_ggv = [ggvs[m] for m in modes]
             cand = None
         v_lim = np.minimum(v_lim, geo.v_cap)
-        k_list = np.abs(geo.k_int).tolist()
+        k_list = (np.abs(geo.k_int) if g3 is None else geo.k_int).tolist()  # signed with bank
         ds_list = geo.ds.tolist()
         lim = v_lim.tolist()
 
@@ -129,26 +158,26 @@ class QSSSolver:
             ay = v * v * k_list[i]
             if node_ggv is not None:
                 g = node_ggv[i]
-                return g.acc_at(v, ay), g.mode
+                return g.acc_at(v, ay, i), g.mode
             best_a, best_m = -1e9, cand[0].mode
             for g in cand:
-                a = g.acc_at(v, ay)
+                a = g.acc_at(v, ay, i)
                 if a > best_a:
                     best_a, best_m = a, g.mode
             return best_a, best_m
 
         def coast(i, v):
             g = node_ggv[i] if node_ggv is not None else cand[0]
-            return g.coast_at(v, v * v * k_list[i])
+            return g.coast_at(v, v * v * k_list[i], i)
 
         def brk(i, v):
             ay = v * v * k_list[i]
             if node_ggv is not None:
                 g = node_ggv[i]
-                return g.brk_at(v, ay), g.mode
+                return g.brk_at(v, ay, i), g.mode
             best_a, best_m = 1e9, cand[0].mode
             for g in cand:
-                a = g.brk_at(v, ay)
+                a = g.brk_at(v, ay, i)
                 if a < best_a:
                     best_a, best_m = a, g.mode
             return best_a, best_m
@@ -267,9 +296,16 @@ class QSSSolver:
         g_node = trk.node_grade()
         # loads and forces follow the tyre force: path acceleration + g sin(theta) on a slope
         ax_tyre = ax if g_node is None else ax + G * g_node
+        ay_tyre, g_sc = np.abs(ay_signed), None
+        if trk.is_3d:  # banked road takes part of the lateral force, normal load scales with gravity
+            sb, cb, kv = trk.gravity_terms()
+            ay_tyre = np.abs(v2 * kappa * cb - G * sb)
+            g_sc = cb + v2 * (kappa * sb + kv) / G
+            ch["gravity_scale"] = g_sc
         for m in np.unique(modes):
             sel = modes == m
-            st = vehicle.solve_state(v[sel], ax_tyre[sel], np.abs(ay_signed[sel]), int(m))
+            st = vehicle.solve_state(v[sel], ax_tyre[sel], ay_tyre[sel], int(m),
+                                     g_scale=None if g_sc is None else g_sc[sel])
             lf = left[sel]
             ch["rh_front_mm"][sel] = st.rh_f * 1000.0
             ch["rh_rear_mm"][sel] = st.rh_r * 1000.0
@@ -369,6 +405,32 @@ class _Geometry:
         self.k_int = k_int
         self.v_cap = v_cap
         self.grade = grade
+        self.road3d = None  # {mode: GravityGGV} on a banked / undulating road
+
+
+class _Road3D:
+    """GGV-like lookups of one mode at interval ``i`` of a banked / undulating road: the lateral demand
+    is reduced by the bank and the envelope is read at the local normal-gravity scale."""
+
+    def __init__(self, gg: "GravityGGV", geo: _Geometry):
+        self.gg, self.mode = gg, gg.mode
+        self.sb, self.cb, self.kv, self.k = geo.sb_i, geo.cb_i, geo.kv_i, geo.k_int.tolist()
+
+    def _args(self, v, ay, i):
+        lam = self.cb[i] + v * v * (self.k[i] * self.sb[i] + self.kv[i]) / G
+        return abs(ay * self.cb[i] - G * self.sb[i]), lam
+
+    def acc_at(self, v, ay, i):
+        a, lam = self._args(v, ay, i)
+        return self.gg.lookup("acc", v, a, lam)
+
+    def brk_at(self, v, ay, i):
+        a, lam = self._args(v, ay, i)
+        return self.gg.lookup("brk", v, a, lam)
+
+    def coast_at(self, v, ay, i):
+        a, lam = self._args(v, ay, i)
+        return self.gg.lookup("coast", v, a, lam)
 
 
 class _ShiftModel:

@@ -15,6 +15,11 @@ Supported CSV inputs (``#`` comment lines allowed; ``# name: ...`` and
   (see :mod:`aerolap.importers`)
 
 Curvature is positive for left-hand corners.
+
+3-D road (optional): ``z_m`` (elevation -> grade ``g sin(theta)``; with ``# vertical_curvature: on`` also the
+crest / dip load change ``v^2 kappa_v``) and ``bank_deg`` (cross slope, + = the surface rises to the right,
+i.e. banked for a left turn): the tyres need ``v^2 kappa cos(phi) - g sin(phi)`` of lateral force and the
+normal load scales with ``cos(phi) + v^2 (kappa sin(phi) + kappa_v) / g``.
 """
 
 from __future__ import annotations
@@ -50,14 +55,11 @@ class Track:
     width_right: np.ndarray | None = None
     use_grade: bool = True  # the solvers use the slope of z ('# grade: off' in a track CSV switches it off)
     grade_smoothing_m: float = 10.0  # elevation is smoothed over this length before the slope is taken
+    bank: np.ndarray | None = None  # rad, cross slope at the nodes (+ = surface rises to the right)
+    use_vertical_curvature: bool = False  # crest / dip load change from z ('# vertical_curvature: on')
 
-    def interval_grade(self) -> np.ndarray | None:
-        """sin(slope) of each interval (positive uphill), from the smoothed elevation; None when flat."""
-        if self.z is None or not self.use_grade:
-            return None
+    def _smooth_z(self):
         z = np.asarray(self.z, dtype=float)
-        if float(np.ptp(z)) < 1e-6:
-            return None
         ds = np.diff(self.s)
         h = float(np.mean(ds))
         w = max(1, int(round(self.grade_smoothing_m / max(h, 1e-6))))
@@ -70,8 +72,40 @@ class Track:
                 w = min(w, len(z) - 1)
                 pad = np.concatenate([2.0 * z[0] - z[w:0:-1], z, 2.0 * z[-1] - z[-2:-w - 2:-1]])
                 z = np.convolve(pad, np.ones(w) / w, mode="same")[w:-w]
-        slope = np.clip(np.diff(z) / np.maximum(ds, 1e-9), -0.5, 0.5)
+        return z
+
+    def interval_grade(self) -> np.ndarray | None:
+        """sin(slope) of each interval (positive uphill), from the smoothed elevation; None when flat."""
+        if self.z is None or not self.use_grade:
+            return None
+        if float(np.ptp(np.asarray(self.z, dtype=float))) < 1e-6:
+            return None
+        z = self._smooth_z()
+        slope = np.clip(np.diff(z) / np.maximum(np.diff(self.s), 1e-9), -0.5, 0.5)
         return slope / np.sqrt(1.0 + slope * slope)
+
+    def node_vertical_curvature(self) -> np.ndarray | None:
+        """Vertical curvature of the road at the nodes (1/m, + = dip / compression), from the smoothed
+        elevation; None unless ``use_vertical_curvature``."""
+        if not self.use_vertical_curvature or self.z is None or float(np.ptp(np.asarray(self.z))) < 1e-6:
+            return None
+        z = self._smooth_z()
+        s = self.s
+        slope = np.gradient(z, s)
+        return np.gradient(slope, s) / (1.0 + slope * slope) ** 1.5
+
+    @property
+    def is_3d(self) -> bool:
+        """Bank or vertical curvature present (the solvers then scale gravity per node)."""
+        has_bank = self.bank is not None and float(np.max(np.abs(self.bank))) > 1e-6
+        return has_bank or self.node_vertical_curvature() is not None
+
+    def gravity_terms(self):
+        """(sin(bank), cos(bank), vertical curvature) per node (zeros where absent)."""
+        n = len(self.s)
+        b = np.zeros(n) if self.bank is None else np.asarray(self.bank, dtype=float)
+        kv = self.node_vertical_curvature()
+        return np.sin(b), np.cos(b), np.zeros(n) if kv is None else kv
 
     def node_grade(self) -> np.ndarray | None:
         g = self.interval_grade()
@@ -88,7 +122,7 @@ class Track:
     def _extras_at(self, s_new) -> dict:
         """Elevation / widths interpolated to new node positions."""
         out = {}
-        for key in ("z", "width_left", "width_right"):
+        for key in ("z", "width_left", "width_right", "bank"):
             val = getattr(self, key)
             if val is not None:
                 out[key] = np.interp(s_new, self.s, val)
@@ -159,7 +193,7 @@ class Track:
     @classmethod
     def from_xy(cls, x, y, name: str = "track", closed: bool | None = None, ds: float = 0.5,
                 cutoff_m: float = 8.0, method: str = "whittaker", smoothing: float = 0.05,
-                z=None, width_left=None, width_right=None) -> "Track":
+                z=None, width_left=None, width_right=None, bank=None) -> "Track":
         """Centre line (or driven line) from coordinates.
 
         ``method="whittaker"`` (default): the points are resampled by arc length and smoothed with a
@@ -172,7 +206,8 @@ class Track:
         x = np.asarray(x, dtype=float)
         y = np.asarray(y, dtype=float)
         extra = {k: np.asarray(v, dtype=float) for k, v in (("z", z), ("width_left", width_left),
-                                                            ("width_right", width_right)) if v is not None}
+                                                            ("width_right", width_right), ("bank", bank))
+                 if v is not None}
         if closed is None:
             seg = np.hypot(np.diff(x), np.diff(y))
             closed = math.hypot(x[-1] - x[0], y[-1] - y[0]) < 3.0 * max(np.median(seg), ds)
@@ -285,7 +320,8 @@ class Track:
             out = cls.from_xy(x, y, name=name, closed=closed, ds=ds, method=method,
                               cutoff_m=float(meta.get("cutoff_m", 8.0)),
                               smoothing=float(meta.get("smoothing_m", 0.05)), z=opt("z_m"),
-                              width_left=opt("width_left_m"), width_right=opt("width_right_m"))
+                              width_left=opt("width_left_m"), width_right=opt("width_right_m"),
+                              bank=None if opt("bank_deg") is None else np.radians(opt("bank_deg")))
             return _meta_width(out, meta)
         if "s_m" in cols:
             s = np.array(col("s_m"), dtype=float)
@@ -309,6 +345,7 @@ class Track:
             for k, v in self._extras_at(out.s).items():
                 setattr(out, k, v)
             out.use_grade, out.grade_smoothing_m = self.use_grade, self.grade_smoothing_m
+            out.use_vertical_curvature = self.use_vertical_curvature
             return out
         if abs(ds - self.ds) < 1e-9:
             return self
@@ -316,6 +353,7 @@ class Track:
         s = np.linspace(0.0, self.length, n + 1)
         out = Track(self.name, s, np.interp(s, self.s, self.kappa), self.closed, **self._extras_at(s))
         out.use_grade, out.grade_smoothing_m = self.use_grade, self.grade_smoothing_m
+        out.use_vertical_curvature = self.use_vertical_curvature
         if self.x is not None and self.y is not None:
             out.x = np.interp(s, self.s, self.x)
             out.y = np.interp(s, self.s, self.y)
@@ -358,6 +396,7 @@ class Track:
         kappa = 0.5 * (before + after)
         out = Track(self.name, s, kappa, self.closed, kappa_int=k, **self._extras_at(s))
         out.use_grade, out.grade_smoothing_m = self.use_grade, self.grade_smoothing_m
+        out.use_vertical_curvature = self.use_vertical_curvature
         x, y = self.xy()
         out.x = np.interp(s, self.s, x)
         out.y = np.interp(s, self.s, y)
@@ -378,7 +417,8 @@ class Track:
 
 def _meta_width(track: Track, meta: dict) -> Track:
     """``# width_m: 4.0`` in a track CSV header: constant track width (unless the file has width columns);
-    ``# grade: off`` ignores the elevation; ``# grade_smoothing_m: 10`` smooths it before the slope."""
+    ``# grade: off`` ignores the elevation; ``# grade_smoothing_m: 10`` smooths it before the slope;
+    ``# vertical_curvature: on`` adds the crest / dip load change."""
     w = meta.get("width_m")
     if w and not track.has_width:
         track = track.with_width(float(w))
@@ -386,6 +426,8 @@ def _meta_width(track: Track, meta: dict) -> Track:
         track.use_grade = False
     if meta.get("grade_smoothing_m"):
         track.grade_smoothing_m = float(meta["grade_smoothing_m"])
+    if str(meta.get("vertical_curvature", "off")).strip().lower() in ("on", "true", "yes", "1"):
+        track.use_vertical_curvature = True
     return track
 
 
