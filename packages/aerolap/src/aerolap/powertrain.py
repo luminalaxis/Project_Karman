@@ -59,6 +59,9 @@ class Powertrain:
         self.differential = cfg["differential"]
         frac = cfg.get("awd_front_fraction")
         self.awd_front_fraction = None if frac is None else float(frac)
+        lock = cfg.get("lsd_locking")
+        self.lsd_locking = None if lock is None else float(lock)
+        self.torque_vectoring = bool(cfg.get("torque_vectoring", False))
         self.radius = tire_radius
         self.shift_time = 0.0
         self.motor: Motor | None = None

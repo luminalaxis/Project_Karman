@@ -147,6 +147,8 @@ DEFAULTS: dict[str, Any] = {
         "cop_lateral_shift_mm_per_deg": 0.0,
         "plank_rate_N_per_mm": None,  # floor / skid contact stiffness; null -> no contact force (clearance check only)
         "plank_friction": 0.3,  # sliding friction of the plank on the road (drag while bottoming)
+        "side_force_area_m2_per_deg": 0.0,  # Cy*A per degree of aero yaw: side force pushing the car out of the turn
+        "side_force_x_mm": None,  # where the side force acts, behind the front axle; null -> at the CG
         "strategy": {},
     },
     "powertrain": {
@@ -154,6 +156,9 @@ DEFAULTS: dict[str, Any] = {
         "differential": "lsd",  # lsd | open
         "efficiency": None,  # drivetrain (gears, chain) efficiency; null -> 0.97 with a motor model, else 0.9
         "awd_front_fraction": None,  # None -> ideal torque split for awd
+        # rear (driven) axle left / right split while driving; both null/false -> ideal split, no yaw moment
+        "lsd_locking": None,  # LSD torque bias ratio (slow inner wheel / outer); 1 = open diff
+        "torque_vectoring": False,  # EV with one motor per rear wheel: split for equal tyre use (yaw moment)
     },
 }
 
@@ -213,11 +218,13 @@ KNOWN_KEYS: dict[str, set[str]] = {
                         "cooling_W_per_K", "max_C", "derate"},
     "aero": {"type", "file", "default_mode", "cl", "cd", "cla", "cda", "frontal_area_m2", "cop_front", "modes",
              "cla_scale", "cda_scale", "cop_shift", "drag_height_mm", "floor_width_mm", "bottoming_clearance_mm",
-             "cop_lateral_shift_mm_per_deg", "plank_rate_N_per_mm", "plank_friction", "strategy", "components",
+             "cop_lateral_shift_mm_per_deg", "plank_rate_N_per_mm", "plank_friction", "side_force_area_m2_per_deg",
+             "side_force_x_mm", "strategy", "components",
              "design"},
     "aero.design": {"fixed", "bounds", "options"},
     "aero.strategy": set(STRATEGY_DEFAULTS),
-    "powertrain": {"type", "drive", "differential", "efficiency", "awd_front_fraction", "ev", "ice"},
+    "powertrain": {"type", "drive", "differential", "efficiency", "awd_front_fraction", "lsd_locking",
+                   "torque_vectoring", "ev", "ice"},
     "powertrain.ev": {"motor", "motor_variant", "motor_cooling", "dc_voltage_V", "controller_current_A", "n_motors",
                       "reduction_ratio", "inverter_efficiency", "power_limit_kW",
                       "rotor_inertia_kgm2", "motor_torque_curve", "max_rpm", "motor_thermal"},
@@ -479,6 +486,16 @@ def validate(cfg: dict) -> None:
                           hint=f"powertrain 아래에 {pt}: 섹션을 넣거나 powertrain.type을 바꾸세요")
     _choice(cfg, "powertrain.drive", ("rwd", "awd"))
     _choice(cfg, "powertrain.differential", ("lsd", "open"))
+    lock = cfg["powertrain"].get("lsd_locking")
+    if lock is not None and _number(cfg, "powertrain.lsd_locking") < 1.0:
+        raise ConfigError(path="powertrain.lsd_locking", value=lock, condition="값 >= 1 (1 = 오픈 디퍼렌셜)",
+                          hint="LSD 토크 바이어스 비(TBR), 보통 1.5 ~ 4")
+    if cfg["powertrain"].get("torque_vectoring"):
+        ev = cfg["powertrain"].get("ev") or {}
+        if pt != "ev" or int(ev.get("n_motors", 1)) < 2:
+            raise ConfigError(path="powertrain.torque_vectoring", value=True,
+                              condition="EV이고 powertrain.ev.n_motors >= 2 (바퀴마다 모터)",
+                              paths=["powertrain.torque_vectoring", "powertrain.ev.n_motors"])
     _choice(cfg, "aero.strategy.type", ("fixed", "rule", "ideal"))
     bat = cfg.get("battery") or {}
     cell = bat.get("cell")

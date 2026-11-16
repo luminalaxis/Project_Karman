@@ -167,6 +167,9 @@ class VehicleModel:
         self.floor_half_width = 0.5 * float(aero["floor_width_mm"]) / 1000.0
         self.bottoming_clearance = float(aero["bottoming_clearance_mm"]) / 1000.0
         self.cop_lateral = float(aero["cop_lateral_shift_mm_per_deg"]) / 1000.0 * 180.0 / math.pi  # m/rad
+        self.cy_area = float(aero.get("side_force_area_m2_per_deg") or 0.0) * 180.0 / math.pi  # m^2 per rad
+        xs = aero.get("side_force_x_mm")
+        self.side_lever = 0.0 if xs is None else self.a - float(xs) / 1000.0  # m ahead of the CG
         kp = aero.get("plank_rate_N_per_mm")
         self.plank_rate = None if kp is None else float(kp) * 1000.0  # N/m per axle
         self.plank_mu = float(aero.get("plank_friction", 0.3))
@@ -415,12 +418,43 @@ class VehicleModel:
         hf, hr, rl, pf, pr = x
         return hf, hr, rl, pf, pr, mf, mr, pk_f, pk_r
 
-    def grip_usage(self, v, ax, ay, fz, camber, inclination, drag, fy_f=None, fy_r=None, roll_steer=None):
+    def aero_side(self, v, yaw):
+        """Aero side force (N, towards the outside of the turn) and its yaw moment about the CG (N m,
+        into the turn +) at aero yaw ``yaw`` (rad, turn frame)."""
+        if self.cy_area == 0.0:
+            return 0.0, 0.0
+        fs = 0.5 * self.rho * np.asarray(v) ** 2 * self.cy_area * np.asarray(yaw)
+        return fs, -fs * self.side_lever
+
+    def _drive_split(self, f_rear, fx_o, fx_i, track):
+        """Driven-axle (left / right) force split: (axle capacity denominator, yaw moment into the turn).
+
+        ``fx_o`` / ``fx_i`` are the longitudinal capacities left by the lateral load of the outer / inner
+        tyre. Torque vectoring: each side in proportion to its capacity (equal use). LSD with torque bias
+        ratio ``TBR``: the slower inner wheel takes up to TBR / (1 + TBR) of the torque, the outer at
+        most TBR x the inner (inner spinning limits the axle to (1 + TBR) x its capacity).
+        """
+        pt = self.powertrain
+        if pt.torque_vectoring:
+            den = fx_o + fx_i
+            share_o = _safe_ratio(fx_o, den, default=0.5)
+            return den, (2.0 * share_o - 1.0) * f_rear * 0.5 * track
+        tbr = pt.lsd_locking
+        f_in = np.minimum(tbr / (1.0 + tbr) * f_rear, fx_i)
+        f_out = f_rear - f_in
+        den = np.minimum(fx_i * (1.0 + tbr), fx_o + fx_i)
+        return den, (f_out - f_in) * 0.5 * track
+
+    def grip_usage(self, v, ax, ay, fz, camber, inclination, drag, fy_f=None, fy_r=None, roll_steer=None,
+                   fy_ext=0.0, mz_ext=0.0):
         """Tyre capacities, slip angles and the utilisation of each axle and of the powertrain.
 
-        The lateral demand per axle is the steady-state yaw-moment split of ``m ay`` unless the
-        actual axle lateral forces ``fy_f`` / ``fy_r`` are given (transient lateral dynamics).
-        ``roll_steer`` = (front, rear) steer of the axles from the suspension (into the turn +).
+        The lateral demand per axle is the steady-state yaw-moment split of ``m ay`` (+ ``fy_ext``, a
+        force pushing the car out of the turn, and the yaw moment ``mz_ext`` into the turn plus the
+        one of the driven axle's left / right split) unless the actual axle lateral forces
+        ``fy_f`` / ``fy_r`` are given (transient lateral dynamics; then the drive yaw moment is only
+        returned as ``mz_drive``). ``roll_steer`` = (front, rear) steer of the axles from the
+        suspension (into the turn +).
         """
         if self.features.camber:
             fx_cap, fy_cap = self.tire.capacity(fz, inclination, camber)
@@ -428,13 +462,29 @@ class VehicleModel:
             fx_cap, fy_cap = self.tire.capacity(fz)
 
         # Lateral demand from steady-state yaw-moment balance (or the given axle forces).
+        pt = self.powertrain
+        given = fy_f is not None
+        total_y = self.m * ay + fy_ext
         if fy_f is None:
-            fy_f = self.m * ay * self.b / self.L
+            fy_f = (self.b * total_y - mz_ext) / self.L
         if fy_r is None:
-            fy_r = self.m * ay * self.a / self.L
+            fy_r = (self.a * total_y + mz_ext) / self.L
         fy_f, fy_r = np.abs(fy_f), np.abs(fy_r)
         uy_f = _safe_ratio(fy_f, fy_cap[FO] + fy_cap[FI])
         uy_r = _safe_ratio(fy_r, fy_cap[RO] + fy_cap[RI])
+        split = pt.lsd_locking is not None or pt.torque_vectoring
+        mz_drive = 0.0
+        if split:  # yaw moment of the driven axle's left / right split -> one correction of the lateral split
+            n0 = self.tire.combined_exponent
+            f_drive0 = np.maximum(self.m * ax + drag + self.tire.rolling_resistance * fz.sum(axis=0), 0.0)
+            f_rear0 = f_drive0 if pt.drive == "rwd" else f_drive0 * (1.0 - (pt.awd_front_fraction or 0.5))
+            lat0 = np.clip(1.0 - np.minimum(uy_r, 1.0) ** n0, 0.0, 1.0) ** (1.0 / n0)
+            _, mz_drive = self._drive_split(f_rear0, fx_cap[RO] * lat0, fx_cap[RI] * lat0, self.rear.track)
+            if not given:
+                fy_f = np.abs((self.b * total_y - mz_ext - mz_drive) / self.L)
+                fy_r = np.abs((self.a * total_y + mz_ext + mz_drive) / self.L)
+                uy_f = _safe_ratio(fy_f, fy_cap[FO] + fy_cap[FI])
+                uy_r = _safe_ratio(fy_r, fy_cap[RO] + fy_cap[RI])
 
         # Sideslip / steer from the tyre slip curve.
         kappa = ay / np.maximum(v, 1.0) ** 2
@@ -462,9 +512,10 @@ class VehicleModel:
         min_r = np.minimum(fx_cap[RO], fx_cap[RI])
         sum_f = fx_cap[FO] + fx_cap[FI]
         sum_r = fx_cap[RO] + fx_cap[RI]
-        pt = self.powertrain
         den_drive_f = 2.0 * min_f if pt.differential == "open" else sum_f
         den_drive_r = 2.0 * min_r if pt.differential == "open" else sum_r
+        if split:  # LSD with a torque bias / torque vectoring on the rear axle (per-axle lateral share)
+            den_drive_r, _ = self._drive_split(0.0 * f_drive, fx_cap[RO], fx_cap[RI], self.rear.track)
         if pt.drive == "rwd":
             fd_f, fd_r = 0.0 * f_drive, f_drive
         elif pt.awd_front_fraction is not None:
@@ -512,7 +563,7 @@ class VehicleModel:
             "fx_cap": fx_cap, "fy_cap": fy_cap, "uy_f": uy_f, "uy_r": uy_r, "alpha_f": alpha_f,
             "alpha_r": alpha_r, "beta": beta, "steer": steer, "f_drive": f_drive, "f_brake": f_brake,
             "u_front": u_front, "u_rear": u_rear, "u_power": u_power, "limit": np.argmax(stack, axis=0),
-            "ux_f": ux_f, "ux_r": ux_r, "f_regen": f_regen,
+            "ux_f": ux_f, "ux_r": ux_r, "f_regen": f_regen, "mz_drive": mz_drive + 0.0 * f_drive,
             "utilization": stack.max(axis=0), "understeer_index": usi,
         }
 
@@ -548,8 +599,9 @@ class VehicleModel:
         df_f, df_r, drag = q * cla_f, q * cla_r, q * cda
         sr = self.suspension_response(ax, ay, df_f, df_r, drag, roll, rh_f, rh_r)
         rs = sr["steer"] if (self.front.bump_steer or self.rear.bump_steer) else None
+        fs, mzs = self.aero_side(v, yaw)
         g = self.grip_usage(v, ax, ay, sr["fz"], sr["camber"], sr["inclination"], drag + self.plank_mu * sr["plank"],
-                            roll_steer=rs)
+                            roll_steer=rs, fy_ext=fs, mz_ext=mzs)
         state = self.make_state(v, ax, ay, mode, rh_f, rh_r, roll, yaw, cla_f, cla_r, cda, oor, df_f, df_r,
                                 drag, sr["fz"], sr["camber"], sr["wheel_lift"], g)
         state.plank = _b(sr["plank"], state.utilization.shape)

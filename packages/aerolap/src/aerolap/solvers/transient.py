@@ -480,7 +480,9 @@ class TransientSolver:
                 alpha_r = rs_r - (vy - car.b * yaw_rate) / vx
                 fyf = tire.axle_lateral_force(alpha_f, fyc[0:2], fz_t[0:2])
                 fyr = tire.axle_lateral_force(alpha_r, fyc[2:4], fz_t[2:4])
-                ay_act = (fyf + fyr) / car.m  # small steer angles, as in the QSS yaw balance
+                # aero side force (vehicle frame) opposes the lateral velocity; its yaw moment about the CG
+                fs_v = -0.5 * car.rho * v * v * car.cy_area * beta if car.cy_area else 0.0
+                ay_act = (fyf + fyr + fs_v) / car.m  # small steer angles, as in the QSS yaw balance
                 fy_dem = (abs(fyf), abs(fyr))
             else:
                 ay_act = v * v * kap
@@ -582,7 +584,9 @@ class TransientSolver:
             if dyn:
                 # lateral / yaw dynamics and the motion relative to the line (Frenet frame)
                 vy += (ay_act - vx * yaw_rate) * dt
-                yaw_rate += (car.a * fyf - car.b * fyr) / car.I_yaw * dt
+                # drive yaw moment (LSD / torque vectoring) acts into the turn the car is making
+                mz_v = g["mz_drive"] * sgn + fs_v * car.side_lever
+                yaw_rate += (car.a * fyf - car.b * fyr + mz_v) / car.I_yaw * dt
                 s_dot = (vx * math.cos(e_psi) - vy * math.sin(e_psi)) / max(1.0 - kap * e_y, 0.2)
                 e_y += (vx * math.sin(e_psi) + vy * math.cos(e_psi)) * dt
                 e_psi += (yaw_rate - kap * s_dot) * dt
@@ -847,7 +851,7 @@ def _flap_command(ref: LapResult, strat) -> np.ndarray:
 
 
 _G_KEYS = ("uy_f", "uy_r", "u_front", "u_rear", "u_power", "alpha_f", "alpha_r", "steer",
-           "understeer_index", "f_drive", "f_brake", "limit", "beta", "ux_f", "ux_r", "f_regen")
+           "understeer_index", "f_drive", "f_brake", "limit", "beta", "ux_f", "ux_r", "f_regen", "mz_drive")
 
 
 def _feasible_prefix(feas: np.ndarray) -> int:
