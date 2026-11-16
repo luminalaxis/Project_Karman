@@ -29,8 +29,10 @@ What the 4-wheel model takes from the Magic Formula (ISO-W / TYDEX sign conventi
   weighting functions ``Gx_alpha``, ``Gy_kappa`` (``RBX*``, ``RCX1``, ``RBY*``, ``RCY1``);
 * vertical stiffness: the configured ``vertical_rate_N_per_mm`` (at NOMPRES) times ``1 + PFZ1 dpi``.
 
-The model is symmetric left / right (like the rest of the vehicle model): conicity / ply-steer offsets
-(``PHX*``, ``PVX*``, ``PHY1-2``, ``PVY1-2``, ``PEY3-4``, ``PEX4``) are left out.
+The peak forces and slip curves are symmetric left / right (the quasi-steady-state model is); the
+conicity / ply-steer offsets ``PHY1-2`` (slip-angle shift) and ``PVY1-2`` (lateral force at zero slip) are
+applied by the transient solver only (:meth:`MagicFormulaTire.lateral_offset`, all wheels the same way:
+the car pulls to one side). ``PHX*``, ``PVX*``, ``PEY3-4``, ``PEX4`` are left out.
 """
 
 from __future__ import annotations
@@ -393,6 +395,15 @@ class MagicFormulaTire:
         eyk = np.minimum(p.get("REY1", 0.0) + p.get("REY2", 0.0) * dfz, 0.99)
         gyk = np.cos(p.get("RCY1", 0.0) * np.arctan(byk * k - eyk * (byk * k - np.arctan(byk * k))))
         return np.maximum(gxa, 0.0) * fx0, np.maximum(gyk, 0.0) * fy0
+
+    def lateral_offset(self, fz: float) -> tuple[float, float]:
+        """(slip-angle shift rad, lateral force at zero slip N) of one tyre: conicity / ply steer
+        (``PHY1 + PHY2 dfz``, ``(PVY1 + PVY2 dfz) Fz``), ISO-W y (to the left)."""
+        p = self.p
+        dfz = (fz - self.fz0) / self.fz0
+        shy = (p.get("PHY1", 0.0) + p.get("PHY2", 0.0) * dfz) * p.get("LHY", 1.0)
+        svy = fz * (p.get("PVY1", 0.0) + p.get("PVY2", 0.0) * dfz) * p.get("LVY", 1.0) * p["LMUY"] * self.ky
+        return shy, svy
 
     def has_combined_terms(self) -> bool:
         p = self.p

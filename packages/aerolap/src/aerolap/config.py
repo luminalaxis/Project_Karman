@@ -128,6 +128,11 @@ DEFAULTS: dict[str, Any] = {
         "mf_file": None,  # Pacejka Magic Formula .tir file (null -> the simple tyre model above)
         "pressure_kPa": None,  # MF 6.1 inflation pressure; null -> INFLPRES / NOMPRES of the .tir
         "mf_mu_scaling": True,  # MF friction scaled to mu_x / mu_y at ref_load_N (track surface level)
+        "temperature_C": None,  # fixed tyre temperature for the grip window below; null -> in the window (no loss)
+        "grip_window": {"optimum_C": 80.0, "width_C": 50.0, "min_factor": 0.6},  # mu x max(min, 1-((T-opt)/w)^2)
+        "thermal": None,  # transient tyre temperature model (dict, see below); null -> constant temperature
+        "peak_slip_ratio": 0.1,  # simple tyre: slip ratio of peak Fx (transient wheel dynamics)
+        "wheel_inertia_kgm2": 0.3,  # per wheel incl. hub, brake disc (transient wheel dynamics)
     },
     "suspension": {},
     "brakes": {"bias_front": None},  # None -> ideal brake balance
@@ -204,7 +209,11 @@ KNOWN_KEYS: dict[str, set[str]] = {
     "geometry": {"wheelbase_mm", "track_front_mm", "track_rear_mm"},
     "tires": {"radius_mm", "mu_x", "mu_y", "ref_load_N", "load_sensitivity", "min_mu_factor",
               "vertical_rate_N_per_mm", "peak_slip_deg", "camber_optimum_deg", "camber_sensitivity_per_deg2",
-              "rolling_resistance", "combined_exponent", "mf_file", "mf", "pressure_kPa", "mf_mu_scaling"},
+              "rolling_resistance", "combined_exponent", "mf_file", "mf", "pressure_kPa", "mf_mu_scaling",
+              "temperature_C", "grip_window", "thermal", "peak_slip_ratio", "wheel_inertia_kgm2"},
+    "tires.grip_window": {"optimum_C", "width_C", "min_factor"},
+    "tires.thermal": {"start_C", "heat_capacity_J_per_K", "cooling_W_per_K", "cooling_W_per_K_per_mps", "heat_share",
+                      "ambient_C"},
     "suspension": {"front", "rear"},
     "suspension.front": _FRONT_AXLE_KEYS,
     "suspension.rear": _REAR_AXLE_KEYS,

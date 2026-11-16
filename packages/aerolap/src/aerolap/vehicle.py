@@ -104,6 +104,12 @@ class VehicleModel:
         self.h = float(ms["cg_height_mm"]) / 1000.0
 
         self.tire = tire_from_config(cfg["tires"], cfg.get("_base_dir", "."))
+        gw = cfg["tires"].get("grip_window") or {}
+        self.grip_window = (float(gw.get("optimum_C", 80.0)), float(gw.get("width_C", 50.0)),
+                            float(gw.get("min_factor", 0.6)))
+        t_tyre = cfg["tires"].get("temperature_C")
+        # grip factor of each tyre (FO, FI, RO, RI order or scalar): the tyre temperature window
+        self.tyre_grip = 1.0 if t_tyre is None else self.grip_temp_factor(float(t_tyre))
         r = self.tire.radius
         sus = cfg["suspension"]
         m_uf = float(ms["unsprung_front_kg"])
@@ -181,6 +187,11 @@ class VehicleModel:
         self.powertrain = Powertrain(cfg["powertrain"], r, cfg.get("battery"))
         bias = cfg["brakes"].get("bias_front")
         self.brake_bias = None if bias is None else float(bias)
+
+    def grip_temp_factor(self, temp_c):
+        """Friction factor of the tyre temperature window, ``max(min, 1 - ((T - opt) / width)^2)``."""
+        opt, width, lo = self.grip_window
+        return np.maximum(lo, 1.0 - ((np.asarray(temp_c, dtype=float) - opt) / width) ** 2)
 
     # ------------------------------------------------------------------ info
     @property
@@ -460,6 +471,11 @@ class VehicleModel:
             fx_cap, fy_cap = self.tire.capacity(fz, inclination, camber)
         else:
             fx_cap, fy_cap = self.tire.capacity(fz)
+        if not (np.isscalar(self.tyre_grip) and self.tyre_grip == 1.0):  # tyre temperature window
+            s = np.asarray(self.tyre_grip, dtype=float)
+            if s.ndim:
+                s = s.reshape((4,) + (1,) * (np.ndim(fx_cap) - 1))
+            fx_cap, fy_cap = fx_cap * s, fy_cap * s
 
         # Lateral demand from steady-state yaw-moment balance (or the given axle forces).
         pt = self.powertrain
@@ -563,7 +579,8 @@ class VehicleModel:
             "fx_cap": fx_cap, "fy_cap": fy_cap, "uy_f": uy_f, "uy_r": uy_r, "alpha_f": alpha_f,
             "alpha_r": alpha_r, "beta": beta, "steer": steer, "f_drive": f_drive, "f_brake": f_brake,
             "u_front": u_front, "u_rear": u_rear, "u_power": u_power, "limit": np.argmax(stack, axis=0),
-            "ux_f": ux_f, "ux_r": ux_r, "f_regen": f_regen, "mz_drive": mz_drive + 0.0 * f_drive,
+            "ux_f": ux_f, "ux_r": ux_r, "f_regen": f_regen, "fx_f": fd_f - fb_f, "fx_r": fd_r - fb_r,
+            "cx_f": sum_f * lat_f, "cx_r": sum_r * lat_r, "mz_drive": mz_drive + 0.0 * f_drive,
             "utilization": stack.max(axis=0), "understeer_index": usi,
         }
 
