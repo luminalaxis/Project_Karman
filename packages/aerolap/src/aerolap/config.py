@@ -241,7 +241,8 @@ KNOWN_KEYS: dict[str, set[str]] = {
     "powertrain": {"type", "drive", "differential", "efficiency", "awd_front_fraction", "lsd_locking",
                    "torque_vectoring", "ev", "ice"},
     "powertrain.ev": {"motor", "motor_variant", "motor_cooling", "dc_voltage_V", "controller_current_A", "n_motors",
-                      "reduction_ratio", "inverter_efficiency", "power_limit_kW",
+                      "reduction_ratio", "inverter_efficiency", "power_limit_kW", "field_weakening_loss",
+                      "winding_temp_C", "efficiency_map",
                       "rotor_inertia_kgm2", "motor_torque_curve", "max_rpm", "motor_thermal"},
     "powertrain.ev.motor_thermal": {"coolant_C", "max_C", "start_C", "conductance_W_per_K", "heat_capacity_J_per_K",
                                     "cp_J_per_kgK", "derate"},
@@ -732,11 +733,16 @@ def relocate_paths(cfg: dict, target_dir: str | Path) -> dict:
             fix(comp, "section_data")
     if isinstance(out.get("tires"), dict):
         fix(out["tires"], "mf_file")
+    ev = (out.get("powertrain") or {}).get("ev")
+    if isinstance(ev, dict):
+        for k in _EV_FILE_KEYS:
+            fix(ev, k)
     return out
 
 
 # relative data-file paths inside a vehicle file (rewritten when a base file from another folder is merged)
 _FILE_KEYS = (("aero", "file"), ("tires", "mf_file"), ("optimumlap", "file"), ("optimumlap", "base"))
+_EV_FILE_KEYS = ("efficiency_map",)
 
 
 def _rebase_files(raw: dict, src_dir: Path, dst_dir: Path) -> dict:
@@ -755,6 +761,8 @@ def _rebase_files(raw: dict, src_dir: Path, dst_dir: Path) -> dict:
 
     for sec, key in _FILE_KEYS:
         fix(out.get(sec), key)
+    for k in _EV_FILE_KEYS:
+        fix((out.get("powertrain") or {}).get("ev"), k)
     for comp in ((out.get("aero") or {}).get("components") or {}).values():
         fix(comp, "section_data")
     return out

@@ -50,7 +50,7 @@ def _curve(points, name: str):
 
 
 class Powertrain:
-    def __init__(self, cfg: dict, tire_radius: float, battery: dict | None = None):
+    def __init__(self, cfg: dict, tire_radius: float, battery: dict | None = None, base_dir: str = "."):
         self.type = cfg["type"]
         eff = cfg.get("efficiency")
         motor_model = cfg["type"] == "ev" and bool((cfg.get("ev") or {}).get("motor"))
@@ -104,7 +104,7 @@ class Powertrain:
         if c.get("motor"):
             if self.pack_voltage is not None:  # bus voltage at full power sets the motor base speed
                 c = {**c, "dc_voltage_V": self.pack_voltage}
-            self.motor = Motor.from_config(c)
+            self.motor = Motor.from_config({**c, "_base_dir": base_dir})
             self.inverter_efficiency = float(c.get("inverter_efficiency", 0.97))
             self.rev_limit = self.motor.max_rpm
             inertia = self.motor.rotor_inertia
