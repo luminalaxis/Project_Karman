@@ -154,6 +154,10 @@ DEFAULTS: dict[str, Any] = {
         "plank_friction": 0.3,  # sliding friction of the plank on the road (drag while bottoming)
         "side_force_area_m2_per_deg": 0.0,  # Cy*A per degree of aero yaw: side force pushing the car out of the turn
         "side_force_x_mm": None,  # where the side force acts, behind the front axle; null -> at the CG
+        "symmetric": True,  # false: the map is read with signed roll / yaw (transient solver; QSS uses magnitudes)
+        "reynolds": None,  # {cl_exponent, cd_exponent, ref_speed_kmh}: coefficients x (v / v_ref)^n (whole car)
+        "unsteady_tau_s": 0.0,  # transient: downforce / drag follow the attitude with this lag
+        "hysteresis_mm": 0.0,  # transient: ground-effect hysteresis (map read lower when the car rises)
         "strategy": {},
     },
     "powertrain": {
@@ -194,7 +198,8 @@ _COMPONENT_KEYS = {"cla", "cda", "cop_front", "scale", "drag_exponent", "points"
                    "h_ref_mm", "height_exponent", "stall_mm", "rake_gain", "roll_loss", "yaw_loss", "cd_area",
                    "induced_k", "section_data", "section", "section_speed_kmh", "cl_factor",
                    "cd_add", "core_area_m2", "exit_area_m2", "loss_coefficient", "inlet_recovery",
-                   "effectiveness", "coolant_temp_C", "body_cda", "heat_share", "enabled", "mass_kg", "section_fit"}
+                   "effectiveness", "coolant_temp_C", "body_cda", "heat_share", "enabled", "mass_kg", "section_fit",
+                   "wake_of", "wake_factor", "reynolds"}
 _ELEMENT_KEYS = {"chord_mm", "deflection_deg", "gap_mm", "overlap_mm", "airfoil", "camber", "thickness", "range",
                  "enabled"}
 _AERO_MODE_KEYS = {"cl", "cd", "cla", "cda", "frontal_area_m2", "cop_front"}
@@ -228,9 +233,10 @@ KNOWN_KEYS: dict[str, set[str]] = {
     "aero": {"type", "file", "default_mode", "cl", "cd", "cla", "cda", "frontal_area_m2", "cop_front", "modes",
              "cla_scale", "cda_scale", "cop_shift", "drag_height_mm", "floor_width_mm", "bottoming_clearance_mm",
              "cop_lateral_shift_mm_per_deg", "plank_rate_N_per_mm", "plank_friction", "side_force_area_m2_per_deg",
-             "side_force_x_mm", "strategy", "components",
+             "side_force_x_mm", "symmetric", "reynolds", "unsteady_tau_s", "hysteresis_mm", "strategy", "components",
              "design"},
     "aero.design": {"fixed", "bounds", "options"},
+    "aero.reynolds": {"cl_exponent", "cd_exponent", "ref_speed_kmh"},
     "aero.strategy": set(STRATEGY_DEFAULTS),
     "powertrain": {"type", "drive", "differential", "efficiency", "awd_front_fraction", "lsd_locking",
                    "torque_vectoring", "ev", "ice"},
@@ -276,7 +282,8 @@ def unknown_keys(cfg: dict) -> list[str]:
     return out
 
 
-_DEV_COMMON = {"type", "enabled", "mass_kg", "heat_share", "cop_front", "range", "x_mm"}
+_DEV_COMMON = {"type", "enabled", "mass_kg", "heat_share", "cop_front", "range", "x_mm", "wake_of", "wake_factor",
+               "reynolds"}
 _WING_GEOM = {"span_m", "aoa_deg", "height_mm", "endplate_factor", "e"}
 # keys each kind of aero component reads (the others are accepted by the shared key set but do nothing)
 _DEVICE_USED = {
@@ -289,7 +296,8 @@ _DEVICE_USED = {
                             "roll_loss", "yaw_loss", "cd_area", "induced_k", "scale"},
     "sidepod": _DEV_COMMON | {"core_area_m2", "exit_area_m2", "loss_coefficient", "inlet_recovery", "effectiveness",
                               "coolant_temp_C", "body_cda", "cla"},
-    "": {"cla", "cda", "cop_front", "scale", "drag_exponent", "points", "enabled", "mass_kg", "heat_share"},
+    "": {"cla", "cda", "cop_front", "scale", "drag_exponent", "points", "enabled", "mass_kg", "heat_share", "wake_of",
+         "wake_factor", "reynolds"},
 }
 _SIMPLE_TYRE_KEYS = ("load_sensitivity", "min_mu_factor", "peak_slip_deg", "camber_optimum_deg",
                      "camber_sensitivity_per_deg2")

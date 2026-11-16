@@ -417,6 +417,10 @@ class TransientSolver:
         e_y = e_psi = 0.0
         ay_prev = v * v * k0
         fyf = fyr = 0.0
+        tau_aero = float(car.cfg["aero"].get("unsteady_tau_s") or 0.0)
+        hyst = float(car.cfg["aero"].get("hysteresis_mm") or 0.0) / 1000.0
+        aero_lag = None
+        rh_prev = (car.front.static_ride_height, car.rear.static_ride_height)
         tyre_th = car.cfg["tires"].get("thermal")
         heat = TyreHeat(car, tyre_th) if tyre_th else None
         grip0 = car.tyre_grip
@@ -488,8 +492,23 @@ class TransientSolver:
                 car.tyre_grip = heat.grip()
             cam_oi, inc_oi = car.corner_camber(np.array([dl[i] for i in oi])[:, None], roll_out)
 
-            # aero at the current (dynamic) attitude and flap position
-            cla_f, cla_r, cda, oor = self._aero(car, strat, lam, rh_f, rh_r, phi, beta)
+            # aero at the current (dynamic) attitude and flap position; ground-effect hysteresis reads the
+            # map lower while the floor rises, unsteady lag delays the coefficients
+            if hyst > 0.0:
+                rh_rd = (rh_f - rh_prev[0]) / dt, (rh_r - rh_prev[1]) / dt
+                rh_prev = (rh_f, rh_r)
+                rh_af = rh_f - 0.5 * hyst * math.copysign(1.0, rh_rd[0]) if abs(rh_rd[0]) > 1e-4 else rh_f
+                rh_ar = rh_r - 0.5 * hyst * math.copysign(1.0, rh_rd[1]) if abs(rh_rd[1]) > 1e-4 else rh_r
+            else:
+                rh_af, rh_ar = rh_f, rh_r
+            # signed map: vehicle-frame roll (right side down +) / yaw (left +); else magnitudes
+            cla_f, cla_r, cda, oor = self._aero(car, strat, lam, rh_af, rh_ar, phi, beta, v)
+            if tau_aero > 0.0:
+                if aero_lag is None:
+                    aero_lag = [cla_f, cla_r, cda]
+                k_a = min(1.0, dt / tau_aero)
+                aero_lag = [a + k_a * (b - a) for a, b in zip(aero_lag, (cla_f, cla_r, cda))]
+                cla_f, cla_r, cda = aero_lag
             q = 0.5 * car.rho * v * v
             df_f, df_r, drag = q * cla_f, q * cla_r, q * cda
             if car.plank_rate is not None:  # plank sliding on the road
@@ -756,14 +775,14 @@ class TransientSolver:
 
     # ------------------------------------------------------------------ helpers
     @staticmethod
-    def _aero(car: VehicleModel, strat, lam, rh_f, rh_r, roll, yaw):
+    def _aero(car: VehicleModel, strat, lam, rh_f, rh_r, roll, yaw, speed=None):
         if lam <= 0.0 or strat.open_mode == strat.closed_mode:
-            c = car.aero_coefficients(strat.closed_mode, rh_f, rh_r, roll, yaw)
+            c = car.aero_coefficients(strat.closed_mode, rh_f, rh_r, roll, yaw, speed)
             return float(c[0]), float(c[1]), float(c[2]), bool(c[3])
-        o = car.aero_coefficients(strat.open_mode, rh_f, rh_r, roll, yaw)
+        o = car.aero_coefficients(strat.open_mode, rh_f, rh_r, roll, yaw, speed)
         if lam >= 1.0:
             return float(o[0]), float(o[1]), float(o[2]), bool(o[3])
-        c = car.aero_coefficients(strat.closed_mode, rh_f, rh_r, roll, yaw)
+        c = car.aero_coefficients(strat.closed_mode, rh_f, rh_r, roll, yaw, speed)
         mix = [(1.0 - lam) * float(a) + lam * float(b) for a, b in zip(c[:3], o[:3])]
         return mix[0], mix[1], mix[2], bool(c[3]) or bool(o[3])
 

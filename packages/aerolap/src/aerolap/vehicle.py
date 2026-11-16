@@ -218,8 +218,9 @@ class VehicleModel:
                                       self.rear.static_ride_height * 1000.0, 0.0, 0.0)
 
     # ------------------------------------------------------------------ physics
-    def aero_coefficients(self, mode: int, rh_f, rh_r, roll, yaw):
-        """ClA_f, ClA_r, CdA (m^2) for a body attitude, honouring the feature switches."""
+    def aero_coefficients(self, mode: int, rh_f, rh_r, roll, yaw, speed=None):
+        """ClA_f, ClA_r, CdA (m^2) for a body attitude (and speed, for the Reynolds effect), honouring
+        the feature switches."""
         f = self.features
         if not f.heave_pitch_aero:
             rh_f, rh_r = self.front.static_ride_height, self.rear.static_ride_height
@@ -228,7 +229,7 @@ class VehicleModel:
         clamp = self.bottoming_clearance
         cla_f, cla_r, cda, oor = self.aero.coefficients(
             mode, np.maximum(rh_f, clamp) * 1000.0, np.maximum(rh_r, clamp) * 1000.0,
-            np.degrees(roll), np.degrees(yaw))
+            np.degrees(roll), np.degrees(yaw), speed)
         if not f.aero_balance:
             total = cla_f + cla_r
             cla_f, cla_r = total * self.wd_front, total * (1.0 - self.wd_front)
@@ -612,7 +613,7 @@ class VehicleModel:
         quasi-static spring balance would settle at for these forces.
         """
         q = 0.5 * self.rho * v * v
-        cla_f, cla_r, cda, oor = self.aero_coefficients(mode, rh_f, rh_r, roll, yaw)
+        cla_f, cla_r, cda, oor = self.aero_coefficients(mode, rh_f, rh_r, roll, yaw, v)
         df_f, df_r, drag = q * cla_f, q * cla_r, q * cda
         sr = self.suspension_response(ax, ay, df_f, df_r, drag, roll, rh_f, rh_r)
         rs = sr["steer"] if (self.front.bump_steer or self.rear.bump_steer) else None

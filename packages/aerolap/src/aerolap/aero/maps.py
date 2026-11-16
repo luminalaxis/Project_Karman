@@ -3,7 +3,17 @@
 Every map returns, per aero mode, the axle downforce areas ``ClA_f``, ``ClA_r``
 (m^2, positive = downforce) and the drag area ``CdA`` (m^2) for given front/rear
 ride heights (mm), body roll (deg) and yaw / sideslip angle (deg). Roll and yaw
-are treated as symmetric (absolute values).
+are treated as symmetric (absolute values) unless ``aero.symmetric: false`` (then the map
+is read with the signed angles the transient solver gives; the QSS solver uses magnitudes).
+
+Optional effects on top of the map / devices:
+
+* ``aero.reynolds`` / ``aero.components.<n>.reynolds`` (``cl_exponent``, ``cd_exponent``,
+  ``ref_speed_kmh``): coefficients x ``(v / v_ref)^n`` (Reynolds-number effect, e.g. a wing that
+  gains lift and loses profile drag at higher speed);
+* ``aero.components.<n>.wake_of`` / ``wake_factor``: the device sits in the wake of another one
+  (e.g. rear wing behind the front wing): its coefficients drop by ``wake_factor`` x the ClA of that
+  device (per m^2), floored at zero.
 
 CSV format (one row per sample, ``#`` comment lines allowed)::
 
@@ -271,15 +281,46 @@ class AeroModel:
         self.cla_scale = float(aero_cfg.get("cla_scale", 1.0))
         self.cda_scale = float(aero_cfg.get("cda_scale", 1.0))
         self.cop_shift = float(aero_cfg.get("cop_shift", 0.0))
+        self.symmetric = bool(aero_cfg.get("symmetric", True))
+        self.reynolds = _reynolds(aero_cfg.get("reynolds"), "aero.reynolds")
+        raw = {n: c for n, c in (aero_cfg.get("components") or {}).items() if isinstance(c, dict)}
+        self.wake = {}
+        self.comp_reynolds = {}
+        names = [c.name for c in self.components]
+        for c in self.components:
+            rc = raw.get(c.name, {})
+            if rc.get("wake_of") is not None:
+                up = str(rc["wake_of"])
+                if up not in names or up == c.name:
+                    from ..config import ConfigError
 
-    def component_totals(self, rh_f=None, rh_r=None, roll=0.0, yaw=0.0):
-        """Front / rear downforce and drag areas of all components at an attitude (default: static)."""
+                    raise ConfigError(path=f"aero.components.{c.name}.wake_of", value=up,
+                                      condition=f"다른 공력 장치 이름: {', '.join(n for n in names if n != c.name)}")
+                self.wake[c.name] = (up, float(rc.get("wake_factor", 0.1)))
+            if rc.get("reynolds") is not None:
+                self.comp_reynolds[c.name] = _reynolds(rc["reynolds"], f"aero.components.{c.name}.reynolds")
+        # upstream devices first (a device in a wake needs the ClA of the one ahead)
+        self.components.sort(key=lambda c: c.name in self.wake)
+
+    def component_totals(self, rh_f=None, rh_r=None, roll=0.0, yaw=0.0, speed=None):
+        """Front / rear downforce and drag areas of all components at an attitude (default: static),
+        with the wake interaction and (at a ``speed``, m/s) the Reynolds scaling of each device."""
         g = self.geometry
         rh_f = g.rh_f0 if rh_f is None else rh_f
         rh_r = g.rh_r0 if rh_r is None else rh_r
         f = r = d = 0.0
+        cla_of = {}
         for c in self.components:
             cf, cr, cd = c.forces_at(g, rh_f, rh_r, roll, yaw)
+            if c.name in self.wake:
+                up, k = self.wake[c.name]
+                keep = np.maximum(1.0 - k * cla_of[up], 0.0)
+                cf, cr, cd = cf * keep, cr * keep, cd * keep
+            re = self.comp_reynolds.get(c.name)
+            if re is not None and speed is not None:
+                sl, sd = _re_factors(re, speed)
+                cf, cr, cd = cf * sl, cr * sl, cd * sd
+            cla_of[c.name] = cf + cr
             f, r, d = f + cf, r + cr, d + cd
         return f, r, d
 
@@ -290,12 +331,16 @@ class AeroModel:
             raise ValueError(f"aero mode {name!r} not in {self.mode_names}")
         return self.mode_names.index(name)
 
-    def coefficients(self, mode: int, rh_f_mm, rh_r_mm, roll_deg, yaw_deg):
-        cla_f, cla_r, cda, oor = self.map.coefficients(mode, rh_f_mm, rh_r_mm,
-                                                       np.abs(roll_deg), np.abs(yaw_deg))
+    def coefficients(self, mode: int, rh_f_mm, rh_r_mm, roll_deg, yaw_deg, speed=None):
+        if self.symmetric:
+            roll_deg, yaw_deg = np.abs(roll_deg), np.abs(yaw_deg)
+        cla_f, cla_r, cda, oor = self.map.coefficients(mode, rh_f_mm, rh_r_mm, roll_deg, yaw_deg)
         if self.components:
-            add_f, add_r, add_d = self.component_totals(rh_f_mm, rh_r_mm, roll_deg, yaw_deg)
+            add_f, add_r, add_d = self.component_totals(rh_f_mm, rh_r_mm, roll_deg, yaw_deg, speed)
             cla_f, cla_r, cda = cla_f + add_f, cla_r + add_r, cda + add_d
+        if self.reynolds is not None and speed is not None:
+            sl, sd = _re_factors(self.reynolds, speed)
+            cla_f, cla_r, cda = cla_f * sl, cla_r * sl, cda * sd
         if self.cla_scale != 1.0 or self.cop_shift != 0.0:
             total = cla_f + cla_r
             with np.errstate(divide="ignore", invalid="ignore"):
@@ -304,6 +349,24 @@ class AeroModel:
             total = total * self.cla_scale
             cla_f, cla_r = total * cop, total * (1.0 - cop)
         return cla_f, cla_r, cda * self.cda_scale, oor
+
+
+def _reynolds(r, path: str):
+    """(cl exponent, cd exponent, reference speed m/s) or None."""
+    if r is None:
+        return None
+    if not isinstance(r, dict) or float(r.get("ref_speed_kmh", 60.0)) <= 0:
+        from ..config import ConfigError
+
+        raise ConfigError(path=path, value=r, condition="{cl_exponent, cd_exponent, ref_speed_kmh > 0}",
+                          hint="예: {cl_exponent: 0.03, cd_exponent: -0.1, ref_speed_kmh: 60}")
+    return (float(r.get("cl_exponent", 0.0)), float(r.get("cd_exponent", 0.0)),
+            float(r.get("ref_speed_kmh", 60.0)) / 3.6)
+
+
+def _re_factors(re, speed):
+    ratio = np.maximum(np.asarray(speed, dtype=float), 1.0) / re[2]
+    return ratio ** re[0], ratio ** re[1]
 
 
 @dataclass

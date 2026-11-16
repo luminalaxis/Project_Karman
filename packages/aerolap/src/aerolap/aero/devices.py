@@ -421,7 +421,7 @@ def device_from_config(name: str, c: dict, base_dir: str | Path = "."):
                           condition=f"type: {kind} 장치의 필수 값", message="빠진 값: " + ", ".join(f"{pre}.{k}" for k in missing))
     for k, v in c.items():
         if k in ("type", "section", "section_data", "range", "ground_effect", "cop_front", "cl0", "cl_max", "cd0",
-                 "h_ref_mm", "section_speed_kmh", "enabled", "section_fit") or (k == "elements" and has_el):
+                 "h_ref_mm", "section_speed_kmh", "enabled", "section_fit", "wake_of", "reynolds") or (k == "elements" and has_el):
             continue
         try:
             float(v)
@@ -572,7 +572,8 @@ DEVICE_KEYS = {"type", "span_m", "chord_m", "elements", "aoa_deg", "x_mm", "heig
                "area_m2", "cl_ref", "h_ref_mm", "height_exponent", "stall_mm", "rake_gain", "roll_loss", "yaw_loss",
                "cd_area", "induced_k", "scale", "section_data", "section", "section_speed_kmh", "cl_factor",
                "cd_add", "core_area_m2", "exit_area_m2", "loss_coefficient", "inlet_recovery",
-               "effectiveness", "coolant_temp_C", "body_cda", "heat_share", "cla", "enabled", "mass_kg", "section_fit"}
+               "effectiveness", "coolant_temp_C", "body_cda", "heat_share", "cla", "enabled", "mass_kg", "section_fit",
+               "wake_of", "wake_factor", "reynolds"}
 
 
 def geometry_from_cfg(cfg: dict) -> Geometry:
