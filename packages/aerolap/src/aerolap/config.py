@@ -75,6 +75,15 @@ AXLE_DEFAULTS: dict[str, Any] = {
     # transient solver only
     "damper_rate_Ns_per_mm": None,  # damper rate at the damper [N/(mm/s)]; null -> from damping_ratio
     "damping_ratio": 0.65,  # corner damping ratio used when damper_rate_Ns_per_mm is null
+    # nonlinear suspension (all off by default)
+    "bump_stop_gap_mm": None,  # wheel travel in bump before the bump stop touches; null -> no bump stop
+    "bump_stop_rate_N_per_mm": 0.0,  # bump stop rate at the wheel (added to the spring beyond the gap)
+    "damper_high_speed_Ns_per_mm": None,  # transient: damper rate above the knee [N/(mm/s)]; null -> linear
+    "damper_knee_mm_s": 50.0,  # damper speed where the high-speed rate takes over
+    "damper_rebound_factor": 1.0,  # rebound (extension) force / bump force at the same speed
+    "roll_center_gain_mm_per_mm": 0.0,  # roll-centre height change per mm of heave (bump +); negative = drops
+    "bump_steer_deg_per_mm": 0.0,  # toe change per mm of bump, + = toe-in (roll steer into the turn)
+    "camber_curve": None,  # [[wheel travel mm (bump +), camber change deg], ...] replaces camber_gain_deg_per_mm
 }
 # anti geometry exists on one axle only: front links carry braking pitch (anti-dive), rear links braking
 # (anti-lift) and driving (anti-squat) pitch
@@ -137,6 +146,8 @@ DEFAULTS: dict[str, Any] = {
         "floor_width_mm": 800.0,
         "bottoming_clearance_mm": 5.0,
         "cop_lateral_shift_mm_per_deg": 0.0,
+        "plank_rate_N_per_mm": None,  # floor / skid contact stiffness; null -> no contact force (clearance check only)
+        "plank_friction": 0.3,  # sliding friction of the plank on the road (drag while bottoming)
         "strategy": {},
     },
     "powertrain": {
@@ -203,7 +214,8 @@ KNOWN_KEYS: dict[str, set[str]] = {
                         "cooling_W_per_K", "max_C", "derate"},
     "aero": {"type", "file", "default_mode", "cl", "cd", "cla", "cda", "frontal_area_m2", "cop_front", "modes",
              "cla_scale", "cda_scale", "cop_shift", "drag_height_mm", "floor_width_mm", "bottoming_clearance_mm",
-             "cop_lateral_shift_mm_per_deg", "strategy", "components", "design"},
+             "cop_lateral_shift_mm_per_deg", "plank_rate_N_per_mm", "plank_friction", "strategy", "components",
+             "design"},
     "aero.design": {"fixed", "bounds", "options"},
     "aero.strategy": set(STRATEGY_DEFAULTS),
     "powertrain": {"type", "drive", "differential", "efficiency", "awd_front_fraction", "ev", "ice"},

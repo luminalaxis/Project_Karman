@@ -97,6 +97,10 @@ class RideModel:
         self.y = [-0.5 * fr.track, 0.5 * fr.track, -0.5 * rr.track, 0.5 * rr.track]
         self.kw = [fr.wheel_rate, fr.wheel_rate, rr.wheel_rate, rr.wheel_rate]
         self.cw = [0.5 * car.C_heave_f] * 2 + [0.5 * car.C_heave_r] * 2
+        self.axles = [fr, fr, rr, rr]
+        # nonlinear corner springs / dampers only where configured (the linear path stays fast)
+        self.nl_spring = [a.has_bump_stop for a in self.axles]
+        self.nl_damper = [a.damper_high_rate is not None or a.rebound_factor != 1.0 for a in self.axles]
         self.k3 = [fr.heave_rate, rr.heave_rate]
         self.karb = [fr.arb_rate / fr.track ** 2, rr.arb_rate / rr.track ** 2]
         mu_f = max(0.5 * car.m_uf, min_unsprung_kg)
@@ -117,7 +121,9 @@ class RideModel:
         dd = [hd + x[i] * thd + y[i] * phd for i in range(4)]
         dl = [d[i] - w[i] for i in range(4)]
         ddl = [dd[i] - wd[i] for i in range(4)]
-        f = [self.kw[i] * dl[i] + self.cw[i] * ddl[i] for i in range(4)]
+        f = [(self.axles[i].corner_force(dl[i]) if self.nl_spring[i] else self.kw[i] * dl[i])
+             + (self.axles[i].damper_force(ddl[i], self.cw[i]) if self.nl_damper[i] else self.cw[i] * ddl[i])
+             for i in range(4)]
         for a, (i, j) in enumerate(((FL, FR), (RL, RR))):
             third = 0.25 * self.k3[a] * (dl[i] + dl[j])
             arb = self.karb[a] * (dl[j] - dl[i])
@@ -132,11 +138,22 @@ class RideModel:
         c = self.car
         f, t, _, _ = self._forces(h, hd, th, thd, ph, phd, w, wd, r, rd)
         sf = sum(f)
-        hdd = (el_f + el_r - sf) / c.m_s
-        thdd = (c.a_s * el_f - c.b_s * el_r - sum(f[i] * self.x[i] for i in range(4))) / c.I_pitch
+        pk_f = pk_r = 0.0
+        if c.plank_rate is not None:  # floor contact pushes the body up (h is down +)
+            pk_f, pk_r = self.plank(h, th, ph, r)
+        hdd = (el_f + el_r - sf - pk_f - pk_r) / c.m_s
+        thdd = (c.a_s * (el_f - pk_f) - c.b_s * (el_r - pk_r) - sum(f[i] * self.x[i] for i in range(4))) / c.I_pitch
         phdd = (m_roll + self.k_grav * ph - sum(f[i] * self.y[i] for i in range(4))) / c.I_roll
         wdd = [(f[i] + geo[i] - t[i]) / self.mu[i] for i in range(4)]
         return hdd, thdd, phdd, wdd
+
+    def plank(self, h, th, ph, r) -> tuple[float, float]:
+        """Floor contact force at the front / rear axle (N) for a body position and road height."""
+        c = self.car
+        d = [h + self.x[i] * th + self.y[i] * ph for i in range(4)]
+        rh_f = c.front.static_ride_height - 0.5 * (d[FL] + d[FR] + r[FL] + r[FR])
+        rh_r = c.rear.static_ride_height - 0.5 * (d[RL] + d[RR] + r[RL] + r[RR])
+        return float(c.plank_force(rh_f, ph)), float(c.plank_force(rh_r, ph))
 
     # ---------------------------------------------------------------- integration
     def step(self, loads, road_fn, t0: float, dt: float, n_sub: int) -> None:
@@ -157,7 +174,7 @@ class RideModel:
                 self.w[i] += self.wd[i] * h_
 
     def set_equilibrium(self, loads, r) -> None:
-        """Static equilibrium for constant loads and road (the model is linear without wheel lift)."""
+        """Static equilibrium for constant loads and road (Newton; one step when the model is linear)."""
         zero4 = [0.0] * 4
 
         def resid(xv):
@@ -165,15 +182,20 @@ class RideModel:
             hdd, thdd, phdd, wdd = self._accel(st, loads, r, zero4)
             return np.array([hdd, thdd, phdd] + wdd)
 
-        x0 = np.zeros(7)
-        r0 = resid(x0)
-        jac = np.empty((7, 7))
+        xs = np.zeros(7)
         eps = 1e-4
-        for j in range(7):
-            xp = x0.copy()
-            xp[j] = eps
-            jac[:, j] = (resid(xp) - r0) / eps
-        xs = np.linalg.solve(jac, -r0)
+        nonlinear = any(self.nl_spring) or self.car.plank_rate is not None
+        for _ in range(30 if nonlinear else 1):
+            r0 = resid(xs)
+            jac = np.empty((7, 7))
+            for j in range(7):
+                xp = xs.copy()
+                xp[j] += eps
+                jac[:, j] = (resid(xp) - r0) / eps
+            dx = np.linalg.solve(jac, -r0)
+            xs = xs + dx
+            if np.max(np.abs(dx)) < 1e-10:
+                break
         self.h, self.th, self.ph = float(xs[0]), float(xs[1]), float(xs[2])
         self.w = [float(v) for v in xs[3:7]]
         self.hd = self.thd = self.phd = 0.0
@@ -428,6 +450,8 @@ class TransientSolver:
             cla_f, cla_r, cda, oor = self._aero(car, strat, lam, rh_f, rh_r, phi, beta)
             q = 0.5 * car.rho * v * v
             df_f, df_r, drag = q * cla_f, q * cla_r, q * cda
+            if car.plank_rate is not None:  # plank sliding on the road
+                drag += car.plank_mu * sum(ride.plank(ride.h, ride.th, ride.ph, r_now))
             ax_coast = -(drag + crr * sum(fz_v)) / car.m
 
             # lateral tyre forces from the slip angles, or the kinematic demand of the line.
@@ -449,8 +473,11 @@ class TransientSolver:
                 else:
                     pk_f = pk_r = alpha_pk
                 vx = max(v, 0.5)
-                alpha_f = delta - (vy + car.a * yaw_rate) / vx
-                alpha_r = -(vy - car.b * yaw_rate) / vx
+                # bump steer (vehicle frame, left +): the loaded right wheel toes in -> steers left
+                rs_f = 0.5 * car.front.bump_steer * (dl[FR] - dl[FL])
+                rs_r = 0.5 * car.rear.bump_steer * (dl[RR] - dl[RL])
+                alpha_f = delta + rs_f - (vy + car.a * yaw_rate) / vx
+                alpha_r = rs_r - (vy - car.b * yaw_rate) / vx
                 fyf = tire.axle_lateral_force(alpha_f, fyc[0:2], fz_t[0:2])
                 fyr = tire.axle_lateral_force(alpha_r, fyc[2:4], fz_t[2:4])
                 ay_act = (fyf + fyr) / car.m  # small steer angles, as in the QSS yaw balance
@@ -545,7 +572,8 @@ class TransientSolver:
             rec["oor"].append(bool(oor))
 
             # integrate: loads for the chosen acceleration drive the ride model
-            comp = car.load_components(ax, ay, df_f, df_r, drag, abs(phi))
+            comp = car.load_components(ax, ay, df_f, df_r, drag, abs(phi), 0.5 * (dl[FL] + dl[FR]),
+                                       0.5 * (dl[RL] + dl[RR]))
             loads = _ride_loads({k: float(val) for k, val in comp.items()}, df_f, df_r, sgn)
             s0, v0 = s, v
             ride.step(loads, lambda tau: road_at(s0 + v0 * tau, v0), 0.0, dt, n_sub)

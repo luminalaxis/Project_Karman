@@ -71,6 +71,7 @@ class VehicleState:
     bottoming: np.ndarray
     wheel_lift: np.ndarray
     converged: np.ndarray = field(default=None)  # type: ignore[assignment]
+    plank: np.ndarray = field(default=None)  # type: ignore[assignment]  # N, floor contact force (both axles)
 
     @property
     def cla(self):
@@ -165,6 +166,11 @@ class VehicleModel:
         self.floor_half_width = 0.5 * float(aero["floor_width_mm"]) / 1000.0
         self.bottoming_clearance = float(aero["bottoming_clearance_mm"]) / 1000.0
         self.cop_lateral = float(aero["cop_lateral_shift_mm_per_deg"]) / 1000.0 * 180.0 / math.pi  # m/rad
+        kp = aero.get("plank_rate_N_per_mm")
+        self.plank_rate = None if kp is None else float(kp) * 1000.0  # N/m per axle
+        self.plank_mu = float(aero.get("plank_friction", 0.3))
+        # bump stops / floor contact: the quasi-static attitude is solved iteratively
+        self.nonlinear_ride = self.front.has_bump_stop or self.rear.has_bump_stop or self.plank_rate is not None
         self.strategy = StrategyConfig.from_config(aero["strategy"], self.aero)
 
         self.rho = density_from_config(cfg["environment"])
@@ -214,8 +220,20 @@ class VehicleModel:
         return cla_f, cla_r, cda, oor
 
     # ---- building blocks shared by the quasi-static and the transient solver -------------
-    def load_components(self, ax, ay, df_f, df_r, drag, roll):
+    def roll_axis(self, heave_f=0.0, heave_r=0.0):
+        """Roll-centre heights (front, rear) and the sprung CG height above the roll axis, with the
+        roll centres moving ``roll_center_gain`` per m of heave."""
+        fr, rr = self.front, self.rear
+        if fr.roll_center_gain == 0.0 and rr.roll_center_gain == 0.0:
+            return fr.roll_center, rr.roll_center, self.d_roll
+        rc_f = fr.roll_center + fr.roll_center_gain * np.asarray(heave_f)
+        rc_r = rr.roll_center + rr.roll_center_gain * np.asarray(heave_r)
+        return rc_f, rc_r, self.h_s - (rc_f + (rc_r - rc_f) * self.a_s / self.L)
+
+    def load_components(self, ax, ay, df_f, df_r, drag, roll, heave_f=0.0, heave_r=0.0):
         """Rigid-body load transfer for the given accelerations and aero forces.
+
+        ``heave_*`` (spring compression, m) only moves the roll centres (``roll_center_gain``).
 
         Returns
 
@@ -232,7 +250,7 @@ class VehicleModel:
         zero = np.zeros(np.broadcast(ax, ay, df_f, drag).shape)
         if not f.load_transfer:
             return {"d_long": zero, "el_f": df_f + zero, "el_r": df_r + zero, "m_roll": zero,
-                    "lat_geo_f": zero, "lat_geo_r": zero}
+                    "lat_geo_f": zero, "lat_geo_r": zero, "d_roll": zero + self.d_roll}
         h_d = self.h_drag if f.drag_height else 0.0
         d_long = (self.m * ax * self.h + drag * h_d) / L
         sprung_long = self.m_s * ax * self.h_s / L
@@ -241,11 +259,12 @@ class VehicleModel:
         el_f = df_f - sprung_long * (1.0 - anti_f) - drag * h_d / L
         el_r = df_r + sprung_long * (1.0 - anti_r) + drag * h_d / L
         y_cp = self.cop_lateral * np.abs(roll)
-        m_roll = self.m_s * ay * self.d_roll + (df_f + df_r) * y_cp
-        lat_geo_f = (self.m_s * ay * (self.b_s / L) * fr.roll_center + self.m_uf * ay * r) / fr.track
-        lat_geo_r = (self.m_s * ay * (self.a_s / L) * rr.roll_center + self.m_ur * ay * r) / rr.track
+        rc_f, rc_r, d_roll = self.roll_axis(heave_f, heave_r)
+        m_roll = self.m_s * ay * d_roll + (df_f + df_r) * y_cp
+        lat_geo_f = (self.m_s * ay * (self.b_s / L) * rc_f + self.m_uf * ay * r) / fr.track
+        lat_geo_r = (self.m_s * ay * (self.a_s / L) * rc_r + self.m_ur * ay * r) / rr.track
         return {"d_long": d_long, "el_f": el_f, "el_r": el_r, "m_roll": m_roll,
-                "lat_geo_f": lat_geo_f, "lat_geo_r": lat_geo_r}
+                "lat_geo_f": lat_geo_f, "lat_geo_r": lat_geo_r, "d_roll": d_roll + zero}
 
     def tyre_loads(self, df_f, df_r, comp, spring_f, spring_r, roll_moment_f, roll_moment_r):
         """Four tyre loads from the forces the suspension actually transmits.
@@ -263,19 +282,27 @@ class VehicleModel:
         wheel_lift = (fz < 0.0).any(axis=0)
         return np.maximum(fz, 0.0), wheel_lift, axle_f, axle_r
 
-    def attitude(self, heave_f, heave_r, axle_f, axle_r, roll):
-        """Ride heights and corner cambers from spring compression (heave), tyre load and roll."""
+    def attitude(self, heave_f, heave_r, axle_f, axle_r, roll, phi_f=None, phi_r=None):
+        """Ride heights, corner cambers and roll steer from spring compression (heave), tyre load and roll.
+
+        ``phi_*`` is the suspension (not tyre) roll of each axle; by default the linear split of
+        ``roll``. Returns ``(rh_f, rh_r, camber, inclination, (steer_f, steer_r))``; the roll steer of
+        each axle is positive into the turn.
+        """
         fr, rr = self.front, self.rear
         heave_f, heave_r, axle_f, axle_r, roll = np.broadcast_arrays(
             *(np.asarray(x, dtype=float) for x in (heave_f, heave_r, axle_f, axle_r, roll)))
         rh_f = fr.static_ride_height - heave_f - (axle_f - self.W_f) / (2.0 * fr.tire_rate)
         rh_r = rr.static_ride_height - heave_r - (axle_r - self.W_r) / (2.0 * rr.tire_rate)
-        phi_f = self.K_f * roll / fr.roll_stiffness_springs  # suspension (not tyre) roll
-        phi_r = self.K_r * roll / rr.roll_stiffness_springs
+        if phi_f is None:
+            phi_f = self.K_f * roll / fr.roll_stiffness_springs
+        if phi_r is None:
+            phi_r = self.K_r * roll / rr.roll_stiffness_springs
         z = np.stack(np.broadcast_arrays(heave_f + 0.5 * fr.track * phi_f, heave_f - 0.5 * fr.track * phi_f,
                                          heave_r + 0.5 * rr.track * phi_r, heave_r - 0.5 * rr.track * phi_r))
         camber, inclination = self.corner_camber(z, roll)
-        return rh_f, rh_r, camber, inclination
+        steer = (0.5 * fr.bump_steer * (z[FO] - z[FI]), 0.5 * rr.bump_steer * (z[RO] - z[RI]))
+        return rh_f, rh_r, camber, inclination, steer
 
     def corner_camber(self, travel, roll):
         """Camber (wheel frame) and lean towards the turn centre of (FO, FI, RO, RI).
@@ -286,36 +313,113 @@ class VehicleModel:
         fr, rr = self.front, self.rear
         z = np.asarray(travel, dtype=float)
         cam0 = np.array([fr.static_camber, fr.static_camber, rr.static_camber, rr.static_camber])
-        gain = np.array([fr.camber_gain, fr.camber_gain, rr.camber_gain, rr.camber_gain])
         side = np.array([1.0, -1.0, 1.0, -1.0])  # body roll tilts outer wheels positive
         shp = (4,) + (1,) * (z.ndim - 1)
-        camber = cam0.reshape(shp) + gain.reshape(shp) * z + side.reshape(shp) * np.asarray(roll)
+        if fr.camber_curve is None and rr.camber_curve is None:
+            gain = np.array([fr.camber_gain, fr.camber_gain, rr.camber_gain, rr.camber_gain])
+            change = gain.reshape(shp) * z
+        else:
+            change = np.concatenate([fr.camber_change(z[0:2]), rr.camber_change(z[2:4])])
+        camber = cam0.reshape(shp) + change + side.reshape(shp) * np.asarray(roll)
         inclination = -side.reshape(shp) * camber  # lean towards the turn centre
         return camber, inclination
 
-    def suspension_response(self, ax, ay, df_f, df_r, drag, roll):
+    def suspension_response(self, ax, ay, df_f, df_r, drag, roll, rh_f=None, rh_r=None):
         """Tyre loads and the quasi-static body attitude for given forces.
 
-        ``roll`` is only used for the aero lateral CoP shift. Returns a dict with the
-        four tyre loads, the new ride heights, roll angle and corner cambers.
+        ``roll`` is only used for the aero lateral CoP shift, ``rh_*`` (current ride heights) for
+        the roll-centre migration. Returns a dict with the four tyre loads, the new ride heights,
+        roll angle, corner cambers, roll steer and floor contact force.
         """
-        comp = self.load_components(ax, ay, df_f, df_r, drag, roll)
-        roll_new = comp["m_roll"] / self._k_roll_eff
+        fr, rr = self.front, self.rear
+        hf0 = 0.0 if rh_f is None else fr.static_ride_height - np.asarray(rh_f)
+        hr0 = 0.0 if rh_r is None else rr.static_ride_height - np.asarray(rh_r)
+        comp = self.load_components(ax, ay, df_f, df_r, drag, roll, hf0, hr0)
+        k_eff = self.K_f + self.K_r - self.m_s * G * comp["d_roll"]
+        roll_new = comp["m_roll"] / k_eff
+        heave_f = comp["el_f"] / fr.heave_stiffness
+        heave_r = comp["el_r"] / rr.heave_stiffness
+        phi_f = phi_r = None
+        m_f, m_r = self.K_f * roll_new, self.K_r * roll_new
+        plank_f = plank_r = 0.0
+        if self.nonlinear_ride:
+            heave_f, heave_r, roll_new, phi_f, phi_r, m_f, m_r, plank_f, plank_r = self._ride_nonlinear(
+                comp, df_f, df_r, heave_f, heave_r, roll_new)
         fz, wheel_lift, axle_f, axle_r = self.tyre_loads(
-            df_f, df_r, comp, comp["el_f"], comp["el_r"], self.K_f * roll_new, self.K_r * roll_new)
-        heave_f = comp["el_f"] / self.front.heave_stiffness
-        heave_r = comp["el_r"] / self.rear.heave_stiffness
-        rh_f, rh_r, camber, inclination = self.attitude(heave_f, heave_r, axle_f, axle_r, roll_new)
+            df_f, df_r, comp, comp["el_f"] - plank_f, comp["el_r"] - plank_r, m_f, m_r)
+        rh_f, rh_r, camber, inclination, steer = self.attitude(heave_f, heave_r, axle_f, axle_r, roll_new,
+                                                               phi_f, phi_r)
         return {
             "fz": fz, "rh_f": rh_f, "rh_r": rh_r, "roll": roll_new, "camber": camber,
-            "inclination": inclination, "wheel_lift": wheel_lift,
+            "inclination": inclination, "wheel_lift": wheel_lift, "steer": steer,
+            "plank": plank_f + plank_r + 0.0 * roll_new,
         }
 
-    def grip_usage(self, v, ax, ay, fz, camber, inclination, drag, fy_f=None, fy_r=None):
+    def plank_force(self, rh, roll):
+        """Floor contact force (N) of one axle: ``plank_rate`` x how far the lowest floor edge is
+        below the road."""
+        if self.plank_rate is None:
+            return 0.0 * np.asarray(rh)
+        edge = np.asarray(rh) - self.floor_half_width * np.sin(np.abs(roll))
+        return self.plank_rate * np.maximum(-edge, 0.0)
+
+    def _ride_nonlinear(self, comp, df_f, df_r, heave_f, heave_r, roll):
+        """Quasi-static attitude with bump stops and floor contact (Newton, vectorised).
+
+        Unknowns per state: heave of each axle, body roll and the suspension roll of each axle (the
+        tyres carry the rest of the body roll in series). Equations: axle spring forces + floor
+        contact = elastic axle loads, total roll moment of the springs = applied moment + gravity
+        term, and each axle's spring roll moment = its tyre roll moment.
+        """
+        fr, rr = self.front, self.rear
+        kt_f, kt_r = 0.5 * fr.tire_rate * fr.track ** 2, 0.5 * rr.tire_rate * rr.track ** 2
+        el_f, el_r, m_roll = comp["el_f"], comp["el_r"], comp["m_roll"]
+        grav = self.m_s * G * comp["d_roll"]
+        defl_f = (df_f - comp["d_long"]) / (2.0 * fr.tire_rate)  # tyre deflection change (plank excluded)
+        defl_r = (df_r + comp["d_long"]) / (2.0 * rr.tire_rate)
+
+        def axle(ax_, h, p):
+            fo, fi = ax_.corner_force(h + 0.5 * ax_.track * p), ax_.corner_force(h - 0.5 * ax_.track * p)
+            return fo + fi + ax_.heave_rate * h, 0.5 * ax_.track * (fo - fi) + ax_.arb_rate * p
+
+        def resid(x):
+            hf, hr, rl, pf, pr = x
+            sf, mf = axle(fr, hf, pf)
+            sr, mr = axle(rr, hr, pr)
+            pk_f = self.plank_force(fr.static_ride_height - hf - defl_f, rl)
+            pk_r = self.plank_force(rr.static_ride_height - hr - defl_r, rl)
+            return np.stack(np.broadcast_arrays(
+                sf + pk_f - el_f, sr + pk_r - el_r, mf + mr - m_roll - grav * rl,
+                mf - kt_f * (rl - pf), mr - kt_r * (rl - pr))), (mf, mr, pk_f, pk_r)
+
+        roll = np.asarray(roll, dtype=float)
+        x = np.stack(np.broadcast_arrays(heave_f, heave_r, roll, self.K_f * roll / fr.roll_stiffness_springs,
+                                         self.K_r * roll / rr.roll_stiffness_springs)).astype(float)
+        eps = 1e-6
+        for _ in range(25):
+            r0, _ = resid(x)
+            jac = np.empty((5,) + x.shape)
+            for j in range(5):
+                xp = x.copy()
+                xp[j] = xp[j] + eps
+                jac[:, j] = (resid(xp)[0] - r0) / eps
+            jm = np.moveaxis(jac, (0, 1), (-2, -1))
+            dx = np.linalg.solve(jm, -np.moveaxis(r0, 0, -1)[..., None])[..., 0]
+            dx = np.moveaxis(dx, -1, 0)
+            dx = np.clip(dx, -0.02, 0.02)  # m / rad: keep a step across a contact kink bounded
+            x = x + dx
+            if np.max(np.abs(dx)) < 1e-9:
+                break
+        _, (mf, mr, pk_f, pk_r) = resid(x)
+        hf, hr, rl, pf, pr = x
+        return hf, hr, rl, pf, pr, mf, mr, pk_f, pk_r
+
+    def grip_usage(self, v, ax, ay, fz, camber, inclination, drag, fy_f=None, fy_r=None, roll_steer=None):
         """Tyre capacities, slip angles and the utilisation of each axle and of the powertrain.
 
         The lateral demand per axle is the steady-state yaw-moment split of ``m ay`` unless the
         actual axle lateral forces ``fy_f`` / ``fy_r`` are given (transient lateral dynamics).
+        ``roll_steer`` = (front, rear) steer of the axles from the suspension (into the turn +).
         """
         if self.features.camber:
             fx_cap, fy_cap = self.tire.capacity(fz, inclination, camber)
@@ -337,6 +441,9 @@ class VehicleModel:
         alpha_r = self.tire.axle_slip_angle(uy_r, fz[RO], fz[RI])
         beta = self.b * kappa - alpha_r
         steer = self.L * kappa + alpha_f - alpha_r
+        if roll_steer is not None:  # rear roll steer turns the car, front roll steer saves hand-wheel steer
+            beta = beta + roll_steer[1]
+            steer = steer + roll_steer[1] - roll_steer[0]
 
         # Longitudinal demand and its distribution.
         rr_force = self.tire.rolling_resistance * fz.sum(axis=0)
@@ -424,10 +531,13 @@ class VehicleModel:
         q = 0.5 * self.rho * v * v
         cla_f, cla_r, cda, oor = self.aero_coefficients(mode, rh_f, rh_r, roll, yaw)
         df_f, df_r, drag = q * cla_f, q * cla_r, q * cda
-        sr = self.suspension_response(ax, ay, df_f, df_r, drag, roll)
-        g = self.grip_usage(v, ax, ay, sr["fz"], sr["camber"], sr["inclination"], drag)
+        sr = self.suspension_response(ax, ay, df_f, df_r, drag, roll, rh_f, rh_r)
+        rs = sr["steer"] if (self.front.bump_steer or self.rear.bump_steer) else None
+        g = self.grip_usage(v, ax, ay, sr["fz"], sr["camber"], sr["inclination"], drag + self.plank_mu * sr["plank"],
+                            roll_steer=rs)
         state = self.make_state(v, ax, ay, mode, rh_f, rh_r, roll, yaw, cla_f, cla_r, cda, oor, df_f, df_r,
                                 drag, sr["fz"], sr["camber"], sr["wheel_lift"], g)
+        state.plank = _b(sr["plank"], state.utilization.shape)
         beta = g["beta"]
         new_attitude = (sr["rh_f"], sr["rh_r"], sr["roll"], beta if self.features.roll_yaw_aero else 0.0 * beta)
         return state, new_attitude
@@ -466,7 +576,8 @@ class VehicleModel:
     def coast_ax(self, state: VehicleState) -> np.ndarray:
         """Acceleration with zero tyre longitudinal force (drag + rolling resistance only)."""
         rr_force = self.tire.rolling_resistance * state.fz.sum(axis=0)
-        return -(state.drag + rr_force) / self.m
+        plank = 0.0 if state.plank is None else self.plank_mu * state.plank
+        return -(state.drag + rr_force + plank) / self.m
 
 
 def _safe_ratio(num, den, default: float = 0.0):
