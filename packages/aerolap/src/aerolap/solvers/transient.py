@@ -76,6 +76,9 @@ class TransientOptions:
     min_unsprung_kg: float = 3.0  # per corner, used when the vehicle has less (or none)
     tyre_damping_ratio: float = 0.05
     wheel_dynamics: bool = False  # wheel spin states: tyre Fx from the slip ratio (lags / spins)
+    driver: str = "pid"  # pid: speed / path follower; mpc: receding-horizon optimal control (casadi)
+    mpc_horizon: float = 0.8  # s
+    mpc_period: float = 0.05  # s, re-plan interval (the command is held in between)
     qss: SolverOptions = field(default_factory=SolverOptions)
 
 
@@ -424,6 +427,14 @@ class TransientSolver:
         e_y = e_psi = 0.0
         ay_prev = v * v * k0
         fyf = fyr = 0.0
+        mpc = mpc_cmd = None
+        t_mpc = 0.0
+        if o.driver == "mpc":
+            if not lat_on:
+                raise ValueError("driver 'mpc' needs the lateral dynamics (lateral_dof)")
+            from ..ocp import MPCDriver
+
+            mpc = MPCDriver(car, s_nodes, ref.v, trk.kappa, horizon=o.mpc_horizon)
         tau_aero = float(car.cfg["aero"].get("unsteady_tau_s") or 0.0)
         hyst = float(car.cfg["aero"].get("hysteresis_mm") or 0.0) / 1000.0
         aero_lag = None
@@ -569,6 +580,13 @@ class TransientSolver:
                 df_f += (lam_g - 1.0) * car.m * G * car.b / car.L  # extra normal load like downforce at the CG
                 df_r += (lam_g - 1.0) * car.m * G * car.a / car.L
             ay = abs(ay_act)
+            if mpc is not None and dyn and t >= t_mpc:  # re-plan acceleration and steering
+                t_mpc = t + o.mpc_period
+                a_max = max(float(np.ravel(car.powertrain.max_force(v)[0])[0]) / car.m + ax_coast, 0.1)
+                mpc_cmd = mpc.command((e_y, e_psi, v, vy, yaw_rate, s),
+                                      (cap_f, cap_r, cap_f + cap_r, a_max, 0.5 * (pk_f + pk_r)))
+            elif not dyn:
+                mpc_cmd = None
 
             # driver command: jerk-limited, then limited by tyres / powertrain at the current loads
             # releasing (towards zero) is faster than applying
@@ -579,6 +597,8 @@ class TransientSolver:
             lo_j = ax_prev - (rel_dt if ax_prev > 0.0 else jerk_dt)
             hi_j = ax_prev + (rel_dt if ax_prev < 0.0 else jerk_dt)
             ax_cmd = min(max(ar + o.kp * (vr - v), lo_j), hi_j)
+            if mpc_cmd is not None:  # optimal-control driver: its acceleration (+ slope), jerk limited
+                ax_cmd = min(max(mpc_cmd[0] + g_slope, lo_j), hi_j)
             if shift_left > 0.0:
                 ax_cmd = min(ax_cmd, max(ax_coast, lo_j))
             if dyn and abs(alpha_r) > pk_r:  # rear sliding: no throttle
@@ -731,6 +751,8 @@ class TransientSolver:
                 e_p = e_y + l_p * math.sin(e_psi + slip)
                 d_cmd = (car.L * k_ff + math.copysign(d_ss, k_ff) - 2.0 * car.L * e_p / l_p ** 2
                          - o.yaw_rate_gain * (yaw_rate - v * k_ff))  # counter-steer a yaw-rate excess
+                if mpc_cmd is not None:
+                    d_cmd = mpc_cmd[1]
                 # no more lock than the front tyres can use: front slip at most just past the peak
                 d_mid = (vy + car.a * yaw_rate) / vx
                 d_cmd = min(max(d_cmd, d_mid - 1.05 * pk_f), d_mid + 1.05 * pk_f)

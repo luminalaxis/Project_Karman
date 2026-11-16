@@ -111,7 +111,8 @@ def cmd_transient(args) -> int:
     start = args.start or ("flying" if track.closed else "standing")
     opts = TransientOptions(dt=args.dt, iterations=args.iterations, max_jerk=args.max_jerk,
                             turn_in_length=args.turn_in, road=args.road, road_seed=args.road_seed,
-                            road_scale=args.road_scale, lateral_dof=not args.no_lateral, qss=_opts(args))
+                            road_scale=args.road_scale, lateral_dof=not args.no_lateral, qss=_opts(args),
+                            driver=args.driver, wheel_dynamics=args.wheels)
     solver = TransientSolver(opts)
     tr = solver.solve(car, track, start=start)
     qss = solver.qss_reference
@@ -669,9 +670,16 @@ def cmd_line(args) -> int:
     if args.width is not None:
         track = track.with_width(args.width)
     weights = [float(w) for w in args.weights.split(",")] if args.weights else DEFAULT_WEIGHTS
-    res = optimise_line(car, track, car_width=args.car_width, clearance=args.clearance, step=args.step,
-                        weights=weights, opts=_opts(args), start=args.start,
-                        progress=lambda k, n, w, t: print(f"  [{k}/{n}] length weight {w:g}: lap {t:.3f} s"))
+    if args.method == "ocp":
+        from .ocp import min_time_line
+
+        res = min_time_line(car, track, car_width=args.car_width, clearance=args.clearance, step=args.step,
+                            opts=_opts(args), start=args.start,
+                            progress=lambda k, n, w, t: print(f"  [{k}/{n}] {w}: lap {t:.3f} s"))
+    else:
+        res = optimise_line(car, track, car_width=args.car_width, clearance=args.clearance, step=args.step,
+                            weights=weights, opts=_opts(args), start=args.start,
+                            progress=lambda k, n, w, t: print(f"  [{k}/{n}] length weight {w:g}: lap {t:.3f} s"))
     out = _out(args, "out/line")
     text = f"vehicle: {car.name}   model: {car.features.label}\n" + res.report()
     print(text)
@@ -861,6 +869,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--road-scale", type=float, default=1.0, help="road amplitude factor")
     sp.add_argument("--no-lateral", action="store_true",
                     help="follow the line exactly (no lateral / yaw dynamics, faster)")
+    sp.add_argument("--driver", choices=("pid", "mpc"), default="pid",
+                    help="pid: speed / path follower (default); mpc: receding-horizon optimal control (casadi, slow)")
+    sp.add_argument("--wheels", action="store_true", help="wheel spin dynamics (tyre Fx from the slip ratio)")
     sp.set_defaults(func=cmd_transient)
 
     sp = sub.add_parser("compare", help="effect ladder: OptimumLap-equivalent (L0) -> full model (L5)")
@@ -1111,6 +1122,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--step", type=float, default=1.0, help="spacing of the line points [m] (1.0)")
     sp.add_argument("--weights", help="path-length weights to try, comma separated "
                                       "(default 0,0.002,0.005,0.01,0.02,0.05; 0 = minimum curvature)")
+    sp.add_argument("--method", choices=("weights", "ocp"), default="weights",
+                    help="weights: minimum curvature + length weight chosen by lap time (default); ocp: minimum-time "
+                         "optimal control (CasADi / IPOPT, pip install casadi), --step 2 recommended")
     sp.set_defaults(func=cmd_line)
 
     sp = sub.add_parser("tire", help="inspect a Magic Formula tyre (.tir file or the tyre of a vehicle file)")
