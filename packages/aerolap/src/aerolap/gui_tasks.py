@@ -38,6 +38,12 @@ COMMON_PARAMS = [
     ("뒤 ARB [Nm/deg]", "suspension.rear.arb_rate_Nm_per_deg"),
     ("앞 정적 차고 [mm]", "suspension.front.static_ride_height_mm"),
     ("뒤 정적 차고 [mm]", "suspension.rear.static_ride_height_mm"),
+    # nonlinear / optional models: shown when the vehicle file sets them (README "추가 물리 모델")
+    ("앞 범프 스톱 간극 [mm]", "suspension.front.bump_stop_gap_mm"),
+    ("뒤 범프 스톱 간극 [mm]", "suspension.rear.bump_stop_gap_mm"),
+    ("플랭크 접촉 강성 [N/mm]", "aero.plank_rate_N_per_mm"),
+    ("LSD 토크 바이어스 비", "powertrain.lsd_locking"),
+    ("타이어 온도 [°C]", "tires.temperature_C"),
     ("감속비", "powertrain.ev.reduction_ratio"),
     ("축전지 전압 [V]", "powertrain.ev.dc_voltage_V"),
     ("출력 한계 [kW]", "powertrain.ev.power_limit_kW"),

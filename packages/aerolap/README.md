@@ -285,7 +285,6 @@ powertrain:
     controller_current_A: null # 인버터 상전류 한계 (null = 모터 최대 전류, MV 360 A)
     n_motors: 1
     reduction_ratio: 3.6
-    drivetrain_efficiency: 0.97
     inverter_efficiency: 0.97
     power_limit_kW: 80         # 축전지 출력 한계 (배터리 측)
 ```
@@ -301,6 +300,12 @@ powertrain:
   랩에서는 77.2 Nm(평균 18.0 kW)로 여유가 있습니다. 냉각 방식(CC: 130 Nm)이나 감속비 선택에 참고할 값입니다
 - 권선(HV/MV/LV)과 전압·인버터 전류 한계는 데이터시트만으로 정해지지 않으므로 팀 사양에 맞게 바꾸세요. 예제 값(MV, LC,
   550 V, 360 A, 감속비 3.6)은 가정입니다
+- `powertrain.efficiency`는 **구동계(기어·체인) 효율 하나**입니다(모터 모델이 있으면 기본 0.97, 없으면 0.9). 모터 모델은
+  그 위에 모터·인버터 손실을 따로 계산합니다(예전 `ev.drivetrain_efficiency`는 이 키로 옮겨지며 경고가 나옵니다)
+- 선택: `field_weakening_loss: true`(기저 속도 위 약계자 d축 전류 동손), `winding_temp_C`(권선 온도에서의 상저항),
+  `efficiency_map: map.csv`(`rpm,torque_Nm,efficiency` 측정 맵). 손실과 효율은 같은 식이라 에너지·열 계산이 일치합니다
+- **모터 출력 통계**: 모든 `summary.txt`·`transient.txt`·`energy.txt`·`events.txt`에 모터 **피크**·**랩 평균**·**구동 중 평균**
+  기계 출력(모든 모터 합), 전기 출력, 배터리 피크·평균 출력이 나옵니다(`motor_power_kW`, `motor_elec_power_kW` 채널)
 
 ## 배터리 · 내구 에너지
 
@@ -308,20 +313,20 @@ powertrain:
 battery:                      # 예제 값은 가정 - 팀 축전지 사양으로 바꾸세요
   capacity_kWh: 7.5           # 공칭 에너지 (null이면 에너지 점검 안 함)
   usable_fraction: 0.95       # 실제로 쓰는 SOC 범위 -> 7.12 kWh
-  max_power_kW: null          # 팩 방전 한계. 실제 한계 = min(이 값, powertrain.ev.power_limit_kW)
   regen_power_kW: 0           # 회생 한계(배터리 측, 0 = 회생 없음)
-  regen_axle_share: 0.35      # 구동축(뒤)이 맡는 제동력 비율 -> 회생 가능한 몫
 ```
 
-- **출력 한계**: `power_limit_kW`(규정 80 kW)와 `max_power_kW`(팩) 중 작은 값이 배터리 측 출력 한계입니다. 모터·인버터
-  효율을 거쳐 휠 구동력 한계로 바뀌어 GGV와 랩에 그대로 들어갑니다
+- **출력 한계**: `powertrain.ev.power_limit_kW`(규정 80 kW, 셀 팩 모델이 있으면 팩이 낼 수 있는 출력과의 최솟값)가 배터리
+  측 출력 한계입니다. 모터·인버터 효율을 거쳐 휠 구동력 한계로 바뀌어 GGV와 랩에 그대로 들어갑니다(예전 `battery.max_power_kW`는
+  이 값으로 합쳐집니다)
 - **랩 에너지 분해**(`energy_breakdown`): 배터리 에너지 = 휠 일 + 모터·인버터·구동계 손실 − 회생, 휠 일 = 공력 항력 +
   구름저항 + 제동(열) + 회생 + 운동에너지 변화
 - **에너지 한계 내구**(`endurance_energy`): 22 km(트랙 길이로 반올림한 랩 수)를 한계 주행했을 때 필요한 에너지가 사용 가능
   에너지를 넘으면, 넘지 않을 때까지 **배터리 출력 캡을 낮춰**(이분법) 그때의 랩타임을 냅니다. 실제 팀이 내구에서 출력을
   제한하는 방식과 같습니다. 같은 에너지에서 더 빠른 리프트 앤 코스트 최적 주행은 아래 `energy-strategy`
-- 회생은 브레이크 블렌딩이 이상적이라고 보고 제동력 중 `regen_axle_share`만큼을 모터 토크·`regen_power_kW` 한도 안에서
-  회수합니다. 회생은 속도 프로파일을 바꾸지 않습니다
+- 회생: 모터가 **구동축을 먼저** 제동하고(모터 토크·`regen_power_kW`·그 축 타이어가 받을 수 있는 만큼), 나머지를 마찰
+  브레이크가 `brakes.bias_front`로 나눕니다. 고정 배분이면 회생이 제동 밸런스를 뒤로 옮겨 제동 한계가 바뀌고, 이상적 배분(null)이면
+  마찰 브레이크가 이상 배분까지만 보충하므로 랩은 거의 같습니다(예전 `regen_axle_share`는 삭제)
 
 ```bash
 aerolap energy data/vehicles/fsae_ev_aero.yaml data/tracks/fsae_endurance_example.csv
@@ -588,14 +593,14 @@ aerolap run data/vehicles/fsk2026.yaml out/line/racing_line.csv
 | `environment` | `temperature_C`, `pressure_kPa`(null이면 고도로 계산), `altitude_m`, `relative_humidity`, `air_density_kg_m3`(있으면 위 값 대신 사용) |
 | `mass` | `total_kg`, `weight_dist_front`, `cg_height_mm`, `unsprung_front_kg`, `unsprung_rear_kg`, 과도용 `pitch_inertia_kgm2`, `roll_inertia_kgm2`, `yaw_inertia_kgm2` |
 | `geometry` | `wheelbase_mm`, `track_front_mm`, `track_rear_mm` |
-| `tires` | `radius_mm`, `mu_x`, `mu_y`, `ref_load_N`, `load_sensitivity`(+100 % 하중당 μ 변화율), `vertical_rate_N_per_mm`, `peak_slip_deg`, `camber_optimum_deg`, `camber_sensitivity_per_deg2`, `rolling_resistance`, `combined_exponent` / Magic Formula: `mf_file`, `pressure_kPa`, `mf_mu_scaling`, `mf` |
+| `tires` | `radius_mm`, `mu_x`, `mu_y`, `ref_load_N`, `load_sensitivity`(+100 % 하중당 μ 변화율), `vertical_rate_N_per_mm`, `peak_slip_deg`, `camber_optimum_deg`, `camber_sensitivity_per_deg2`, `rolling_resistance`, `combined_exponent` / Magic Formula: `mf_file`, `pressure_kPa`, `mf_mu_scaling`, `mf` / 온도: `temperature_C`, `grip_window`, `thermal` / 과도 휠 동역학: `peak_slip_ratio`, `wheel_inertia_kgm2` |
 | (맨 위) `base` | 먼저 읽을 차량 YAML (이 파일의 값이 덮어씀) |
-| `suspension.front/rear` | `spring_rate_N_per_mm`, `motion_ratio`, `arb_rate_Nm_per_deg`, `heave_spring_N_per_mm`, `roll_center_mm`, `static_ride_height_mm`, `static_camber_deg`, `camber_gain_deg_per_mm`, `anti_dive` / `anti_lift` / `anti_squat`, 과도용 `damping_ratio` 또는 `damper_rate_Ns_per_mm` |
+| `suspension.front/rear` | `spring_rate_N_per_mm`, `motion_ratio`, `arb_rate_Nm_per_deg`, `heave_spring_N_per_mm`, `roll_center_mm`, `static_ride_height_mm`, `static_camber_deg`, `camber_gain_deg_per_mm` 또는 `camber_curve`, 앞 `anti_dive` / 뒤 `anti_lift`·`anti_squat`, 과도용 `damping_ratio` 또는 `damper_rate_Ns_per_mm`, 비선형: `bump_stop_gap_mm`·`bump_stop_rate_N_per_mm`, `damper_high_speed_Ns_per_mm`·`damper_knee_mm_s`·`damper_rebound_factor`, `roll_center_gain_mm_per_mm`, `bump_steer_deg_per_mm` |
 | `brakes` | `bias_front` (null = 이상적 배분) |
-| `aero` | `type`(constant/table/response_surface), `file`, `default_mode`, `cla_scale`, `cda_scale`, `cop_shift`, `drag_height_mm`, `floor_width_mm`, `bottoming_clearance_mm`, `cop_lateral_shift_mm_per_deg`, `strategy` |
-| `aero.strategy` | `type`(fixed/rule/ideal), `open_mode`, `closed_mode`, `open_radius_m`, `min_length_m`, `min_speed_kmh`, `open_delay_s`, `close_delay_s`, `close_anticipation` |
-| `battery` | `capacity_kWh`, `usable_fraction`, `max_power_kW`, `regen_power_kW`, `regen_axle_share` / 팩 모델: `series`, `parallel`, `soc`, `soc_min`, `soc_stages`, `interconnect_resistance_mOhm`, `max_current_A`, `temperature_C`, `cell:` (`capacity_Ah`, `resistance_mOhm`, `max_current_A`, `v_min`, `ocv`, `resistance_temp`, `resistance_soc`) / 열: `thermal:` (`cell_mass_g`, `cp_J_per_kgK`, `heat_capacity_J_per_K`, `start_C`, `ambient_C`, `cooling_W_per_K`, `max_C`, `derate`) |
-| `powertrain` | `type`(ev/ice), `drive`(rwd/awd), `differential`(lsd/open), `efficiency`, `ev:` `motor`(emrax_228)·`motor_variant`·`motor_cooling`·`dc_voltage_V`·`controller_current_A`·`n_motors`·`drivetrain_efficiency`·`inverter_efficiency`·`rotor_inertia_kgm2` 또는 `motor_torque_curve`·`max_rpm`, `reduction_ratio`, `power_limit_kW`, `motor_thermal:` (`coolant_C`, `max_C`, `start_C`, `conductance_W_per_K`, `heat_capacity_J_per_K`, `derate`) / `ice:` 토크 곡선·기어비·`shift_time_s` |
+| `aero` | `type`(constant/table/response_surface), `file`, `default_mode`, `cla_scale`, `cda_scale`, `cop_shift`, `drag_height_mm`, `floor_width_mm`, `bottoming_clearance_mm`, `cop_lateral_shift_mm_per_deg`, `strategy`, `plank_rate_N_per_mm`·`plank_friction`, `side_force_area_m2_per_deg`·`side_force_x_mm`, `symmetric`, `reynolds`, `unsteady_tau_s`, `hysteresis_mm`; 장치별 `wake_of`·`wake_factor`·`reynolds` |
+| `aero.strategy` | `type`(fixed/rule/ideal), `open_mode`(닫힌 모드 = `aero.default_mode`), `open_radius_m`, `min_length_m`, `min_speed_kmh`, `open_delay_s`, `close_delay_s`, `close_anticipation` |
+| `battery` | `capacity_kWh`, `usable_fraction`, `regen_power_kW` / 팩 모델: `series`, `parallel`, `soc`, `soc_min`, `soc_stages`, `interconnect_resistance_mOhm`, `max_current_A`, `temperature_C`, `cell:` (`capacity_Ah`, `resistance_mOhm`, `max_current_A`, `v_min`, `ocv`, `resistance_temp`, `resistance_soc`) / 열: `thermal:` (`cell_mass_g`, `cp_J_per_kgK`, `heat_capacity_J_per_K`, `start_C`, `ambient_C`, `cooling_W_per_K`, `max_C`, `derate`) |
+| `powertrain` | `type`(ev/ice), `drive`(rwd/awd), `differential`(lsd/open), `lsd_locking`, `torque_vectoring`, `efficiency`(구동계), `ev:` `motor`(emrax_228)·`motor_variant`·`motor_cooling`·`dc_voltage_V`·`controller_current_A`·`n_motors`·`inverter_efficiency`·`rotor_inertia_kgm2`·`field_weakening_loss`·`winding_temp_C`·`efficiency_map` 또는 `motor_torque_curve`·`max_rpm`, `reduction_ratio`, `power_limit_kW`, `motor_thermal:` (`coolant_C`, `max_C`, `start_C`, `conductance_W_per_K`, `heat_capacity_J_per_K`, `derate`) / `ice:` 토크 곡선·기어비·`shift_time_s` |
 
 aero map 없이 OptimumLap처럼 상수로 쓰려면:
 
@@ -1018,6 +1023,29 @@ MATLAB/Octave에서 `S = load('out/ggv/ggv.mat')`, `L = load('out/run/trace.mat'
    적분 방식 등)이 달라 정확히 일치한다고 보장하지는 않으므로, 차이가 크면 파라미터 대응부터 확인합니다.
 3. 무게중심 높이, 롤센터, 스프링·ARB, 차고, aero map을 채우고 `aerolap compare`로 L1–L5에서 무엇이 바뀌는지 봅니다.
 
+## 추가 물리 모델 (선택, 기본은 꺼짐)
+
+모두 기본값에서는 꺼져 있어 예전 결과가 그대로 나옵니다. 켜는 키:
+
+| 효과 | 키 | 들어가는 곳 |
+|---|---|---|
+| 범프 스톱 | `suspension.<축>.bump_stop_gap_mm`, `bump_stop_rate_N_per_mm` | QSS(히브·롤 뉴턴 해, 롤·히브가 연성됨), 과도 |
+| 바닥(플랭크) 접촉력·마찰 | `aero.plank_rate_N_per_mm`, `plank_friction` | 타이어 하중이 줄고 항력 증가 (QSS, 과도) |
+| 바이리니어·리바운드 댐퍼 | `damper_high_speed_Ns_per_mm`, `damper_knee_mm_s`, `damper_rebound_factor` | 과도 |
+| 롤센터 이동 / 범프 스티어 / 캠버 커브 | `roll_center_gain_mm_per_mm`, `bump_steer_deg_per_mm`, `camber_curve` | QSS, 과도 |
+| LSD 잠김(TBR) / 토크 벡터링 | `powertrain.lsd_locking`, `powertrain.torque_vectoring`(EV, `n_motors` >= 2) | 구동축 좌우 분배 → 요 모멘트, 견인 한계 |
+| 공력 횡력·요 모멘트 | `aero.side_force_area_m2_per_deg`, `side_force_x_mm` | 횡력 분배(QSS), 횡·요 방정식(과도) |
+| 장치 간 후류 간섭 | `aero.components.<n>.wake_of`, `wake_factor` | 뒤 장치 계수 감소 |
+| 레이놀즈 효과 | `aero.reynolds`, `components.<n>.reynolds` (`cl_exponent`, `cd_exponent`, `ref_speed_kmh`) | 속도에 따른 계수 |
+| 비정상 지연 / 지면효과 히스테리시스 / 부호 있는 롤·요 맵 | `aero.unsteady_tau_s`, `hysteresis_mm`, `symmetric: false` | 과도 |
+| 타이어 온도 | `tires.temperature_C`(QSS 고정), `tires.grip_window`, `tires.thermal`(과도: 슬립 일률로 가열) | 마찰 계수 |
+| 휠 슬립(κ) 동역학 | `aerolap transient --wheels` (`tires.peak_slip_ratio`, `wheel_inertia_kgm2`) | 과도 |
+| 코니시티·플라이스티어 | MF `.tir`의 `PHY1-2`, `PVY1-2` | 과도(차가 한쪽으로 당김) |
+| 뱅크 / 크레스트·딥 | 트랙 CSV `bank_deg` 열, `# vertical_curvature: on` | 중력 배율별 g-g-V(QSS), 과도 |
+| 최소 시간 라인 | `aerolap line --method ocp --step 2` (`pip install casadi`) | 최적 제어(IPOPT), 최소 곡률 라인과 QSS 랩으로 비교 |
+| MPC 드라이버 | `aerolap transient --driver mpc` | 과도(트레일 브레이킹은 마찰원 제약에서 나옴) |
+| 에너지 최적 주행의 모터 온도 | `motor_thermal` (`derate: true`) | DP에 모터 열 비용 |
+
 ## 모델 요약
 
 자세한 수식·가정·한계는 [docs/model.md](docs/model.md)를 보세요.
@@ -1025,9 +1053,8 @@ MATLAB/Octave에서 `S = load('out/ggv/ggv.mat')`, `L = load('out/run/trace.mat'
 - 매 `(v, ax, ay)`에서 **공력 → 4륜 하중 → 서스펜션 변위(차고·피치·롤) → 슬립각(요) → 공력**을 고정점 반복으로 풉니다
 - 속도별 g-g-V 엔벨로프를 만든 뒤 정점 속도 + 전진/후진 적분(Heun)으로 속도 프로파일을 구합니다
 - 언더스티어 지수(앞축 횡 이용률/뒷축 횡 이용률)로 저속(기계적 밸런스) ↔ 고속(공력 밸런스) 전환을 봅니다
-- 과도 해석에도 타이어 온도, 비선형 댐퍼, 범프 스톱, 바닥 접촉 반력, 회생 제동의 차량 거동 영향(에너지만 계산),
-  좌우 구동력 차이에 의한 요 모멘트는 없습니다. 노면 경사는 종방향 운동에만 들어갑니다(수직 곡률·뱅크 없음).
-  횡 동역학은 소각도 이륜(bicycle) 근사이고 드라이버는 주어진 라인을 따라갑니다(라인은 `aerolap line`으로 미리 최적화해 트랙으로 넣음)
+- 남은 단순화: 횡 동역학은 소각도 이륜(bicycle) 근사, QSS는 좌우 대칭(코니시티·부호 있는 공력 맵은 과도에서만),
+  OCP 라인은 닫힌 공력 모드·평평한 노면(경사는 포함)의 엔벨로프를 씁니다. 위 "추가 물리 모델" 참고
 
 ## 개발
 
