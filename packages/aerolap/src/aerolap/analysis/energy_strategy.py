@@ -126,6 +126,9 @@ class LapDP:
         dt = np.full((n, K, 2 * B + 1), np.inf, dtype=np.float32)
         de = np.zeros((n, K, 2 * B + 1), dtype=np.float32)
         dq = np.zeros((n, K, 2 * B + 1), dtype=np.float32) if pack is not None else None  # cell heat, J
+        # motor winding heat (copper + iron losses x time), J - priced when the motor runs too hot
+        motor = pt.motor if pt.type == "ev" else None
+        dqm = np.zeros((n, K, 2 * B + 1), dtype=np.float32) if motor is not None else None
         m_car, m_rot = car.m, pt.m_rot
         for lo in range(0, n, chunk):
             idx = np.arange(lo, min(lo + chunk, n))
@@ -154,13 +157,21 @@ class LapDP:
                 i_pack = pack.current(p)
                 p = p + pack.resistance * i_pack * i_pack
                 dq[idx] = np.where(feas, pack.cell_resistance() * i_pack * i_pack * t, 0.0)
+            if dqm is not None:
+                dqm[idx] = np.where(feas, self._motor_heat(vm, f_motor) * t, 0.0)
             dt[idx] = np.where(feas, t, np.inf)
             de[idx] = np.where(feas, p * t, 0.0)
-        self.dt, self.de, self.dq = dt, de, dq
+        self.dt, self.de, self.dq, self.dqm = dt, de, dq, dqm
         self._kb_ok = kb_ok
         self._j_end_hint = None
         # pack state of this car (fixed SOC / temperature): open-circuit voltage, resistance, cell resistance
         self._pack = None if pack is None else (float(pack.ocv()), float(pack.resistance), float(pack.cell_resistance()))
+
+    def _motor_heat(self, vm, f_motor):
+        """Loss power of all motors (W) for a wheel force ``f_motor`` at speed ``vm`` (drive only)."""
+        pt = self.car.powertrain
+        rpm, torque, _ = pt.motor_point(vm, np.maximum(f_motor, 0.0))
+        return np.where(torque > 0.0, pt.motor.losses(rpm, torque), 0.0) * pt.n_motors
 
     @staticmethod
     def _heun(g, which, va, kk, d, slope=0.0):
@@ -178,18 +189,21 @@ class LapDP:
         return out
 
     # ------------------------------------------------------------------ dynamic programming
-    def _backward(self, lam_j: float, j_end: np.ndarray, mu_j: float = 0.0):
+    def _backward(self, lam_j: float, j_end: np.ndarray, mu_j: float = 0.0, nu_j: float = 0.0):
         n, K = self.n, self.K
         jall = np.empty((n + 1, K))
         jall[n] = j_end
         j = j_end
         rows = np.arange(K)
         heat = mu_j > 0.0 and self.dq is not None
+        mheat = nu_j > 0.0 and self.dqm is not None
         for i in range(n - 1, -1, -1):
             jn = np.where(self._kb_ok, j[self.kb_c], np.inf)
             tot = self.dt[i] + lam_j * self.de[i] + jn
             if heat:
                 tot = tot + mu_j * self.dq[i]
+            if mheat:
+                tot = tot + nu_j * self.dqm[i]
             best = tot[rows, np.argmin(tot, axis=1)]
             coast = self.c_dt[i] + self._interp_j(j, self.c_lo[i], self.c_w[i])
             j = np.minimum(best, coast)
@@ -204,7 +218,8 @@ class LapDP:
         a2 = fn(vp, vp * vp * kk) - slope
         return math.sqrt(max(va * va + (a1 + a2) * d, 1e-6))
 
-    def _step_costs(self, i: int, va: float, lam_j: float, j_next: np.ndarray, mu_j: float = 0.0):
+    def _step_costs(self, i: int, va: float, lam_j: float, j_next: np.ndarray, mu_j: float = 0.0,
+                    nu_j: float = 0.0):
         """From the actual speed ``va`` at node i: (next speed, dt, energy, total cost) of the best transition."""
         car, pt = self.car, self.car.powertrain
         g = self.ggvs[int(self.modes[i])]
@@ -224,10 +239,13 @@ class LapDP:
             vm = 0.5 * (va + vb)
             force = car.m * (ax + sl - g.table_vec("coast", vm, vm * vm * kk))
             f_drive = np.maximum(force, 0.0)
-            p = pt.battery_power(vm, f_drive + pt.m_rot * np.maximum(ax, 0.0) * (f_drive > 0.0))
+            f_mot = f_drive + pt.m_rot * np.maximum(ax, 0.0) * (f_drive > 0.0)
+            p = pt.battery_power(vm, f_mot)
             if pt.regen_power > 0.0:
                 p = p - pt.regen_battery_power(vm, np.maximum(-force, 0.0))
             tot = t + j_next[idx]
+            if nu_j > 0.0 and self.dqm is not None:
+                tot = tot + nu_j * self._motor_heat(vm, f_mot) * t
             if self._pack is not None:
                 voc, r, rc = self._pack
                 pp = np.minimum(p, voc * voc / (4.0 * r))
@@ -255,15 +273,16 @@ class LapDP:
                 best = (vc, tc, 0.0, tc + jc)
         return best
 
-    def solve(self, lam: float, max_pass: int = 8, mu: float = 0.0):
-        """Optimal periodic profile for ``lam`` [s/kJ of battery energy] and ``mu`` [s/kJ of cell heat]:
-        (speeds at the nodes, time, battery energy [J])."""
+    def solve(self, lam: float, max_pass: int = 8, mu: float = 0.0, nu: float = 0.0):
+        """Optimal periodic profile for ``lam`` [s/kJ of battery energy], ``mu`` [s/kJ of cell heat] and
+        ``nu`` [s/kJ of motor heat]: (speeds at the nodes, time, battery energy [J])."""
         lam_j = float(lam) / 1000.0
         mu_j = float(mu) / 1000.0
+        nu_j = float(nu) / 1000.0
         j_end = self._j_end_hint if self._j_end_hint is not None else np.zeros(self.K)
         prev = None
         for _ in range(max_pass):
-            jall = self._backward(lam_j, j_end, mu_j)
+            jall = self._backward(lam_j, j_end, mu_j, nu_j)
             j0 = jall[0]
             if not np.isfinite(j0).any():
                 raise RuntimeError("no feasible speed profile (grid too coarse?)")
@@ -277,14 +296,15 @@ class LapDP:
         v[0] = self.V[0, k0]
         t_sum = e_sum = 0.0
         for i in range(self.n):
-            v[i + 1], dt, de, _ = self._step_costs(i, float(v[i]), lam_j, jall[i + 1], mu_j)
+            v[i + 1], dt, de, _ = self._step_costs(i, float(v[i]), lam_j, jall[i + 1], mu_j, nu_j)
             t_sum += dt
             e_sum += de
         return v, t_sum, e_sum
 
-    def lap(self, lam: float, mu: float = 0.0) -> LapResult:
-        """Optimal profile for ``lam`` (and the cell-heat price ``mu``) evaluated like any QSS lap."""
-        v, _, _ = self.solve(lam, mu=mu)
+    def lap(self, lam: float, mu: float = 0.0, nu: float = 0.0) -> LapResult:
+        """Optimal profile for ``lam`` (and the cell / motor heat prices ``mu`` / ``nu``) evaluated like
+        any QSS lap."""
+        v, _, _ = self.solve(lam, mu=mu, nu=nu)
         return self.solver.evaluate_profile(self.car, self.trk, v, self.modes)
 
 
@@ -350,6 +370,7 @@ class EnduranceStrategy:
     mix: float | None = None  # share of laps driven with the next-lower lambda to use the budget exactly
     thermal: object = None  # ThermalRun of the optimal strategy (thermal models configured)
     mu: float = 0.0  # s/kJ, price of the cell heat that keeps the cells below their limit (0: not needed)
+    nu: float = 0.0  # s/kJ, price of the motor heat that keeps the winding below its limit (0: not needed)
 
     @property
     def total_s(self) -> float:
@@ -372,7 +393,9 @@ class EnduranceStrategy:
                      f"{c.total_time_s:8.1f} s   ({cap})")
         lines.append(f"  energy-optimal:      lap {self.lap_s:8.3f} s   {self.required_kWh:6.2f} kWh   total "
                      f"{self.total_s:8.1f} s   (lambda {self.lam:.4g} s/kJ"
-                     + (f", cell heat priced {self.mu:.4g} s/kJ to stay below the cell limit" if self.mu else "") + ")")
+                     + (f", cell heat priced {self.mu:.4g} s/kJ to stay below the cell limit" if self.mu else "")
+                     + (f", motor heat priced {self.nu:.4g} s/kJ to stay below the motor limit" if self.nu else "")
+                     + ")")
         if self.mix:
             lines.append(f"     ({self.mix * 100:.0f} % of the laps with the next-lower lambda, so the budget is used "
                          "exactly)")
@@ -395,7 +418,7 @@ class EnduranceStrategy:
             lines += ["  " + ln for ln in self.thermal.report_lines()]
             if self.thermal.over_limit:
                 lines.append("  WARNING: the optimal driving overheats " + ", ".join(self.thermal.over_limit)
-                             + (" (the motor limit is only checked)" if self.thermal.over_limit == ["motor"] else
+                             + (" (motor over its limit even with its heat priced)" if self.thermal.over_limit == ["motor"] else
                                 " - even with the cell heat priced; more cooling needed"))
         if self.lifts:
             lines.append(f"  lift-and-coast points of the optimal lap ({len(self.lifts)}, coasting "
@@ -443,37 +466,37 @@ def endurance_strategy(cfg: dict, track: Track, distance_km: float = 22.0, featu
         log(f"transition table{'' if soc is None else f' (SOC {soc:.2f})'} ...")
         stages.append(StrategyStage(laps, soc, LapDP(VehicleModel(c, features), track, opts, dv=dv)))
 
-    def run(lam, mu=0.0):
+    def run(lam, mu=0.0, nu=0.0):
         laps, total_t, total_e = [], 0.0, 0.0
         for st in stages:
-            res = st.dp.lap(lam, mu)
+            res = st.dp.lap(lam, mu, nu)
             e = res.energy_J / KWH
             laps.append((st.laps, res.lap_time, e, res))
             total_t += res.lap_time * st.laps
             total_e += e * st.laps
         return total_t, total_e, laps
 
-    def fit_energy(mu=0.0, guess=None, rtol=1.03):
-        """Smallest lambda that keeps the run inside the energy budget at the cell-heat price ``mu``:
-        (lambda, (time, energy, laps), (time, energy) just above the budget, fits).
+    def fit_energy(mu=0.0, guess=None, rtol=1.03, nu=0.0):
+        """Smallest lambda that keeps the run inside the energy budget at the heat prices ``mu`` (cells) and
+        ``nu`` (motor): (lambda, (time, energy, laps), (time, energy) just above the budget, fits).
         ``guess``: a lambda close to the answer (tighter bracket); ``rtol``: final bracket ratio."""
         if usable is None:
-            t0, e0, lp0 = run(0.0, mu)
+            t0, e0, lp0 = run(0.0, mu, nu)
             return 0.0, (t0, e0, lp0), None, True
         step = 1.6 if guess else 10.0
         hi = guess or 1e-2
-        t, e, lp = run(hi, mu)
+        t, e, lp = run(hi, mu, nu)
         if e <= usable:  # walk down until it does not fit (or lambda = 0 fits)
             best, lo, above = (t, e, lp), None, None
             for _ in range(40):
                 lo = hi / step
                 if lo < 1e-6:
-                    t0, e0, lp0 = run(0.0, mu)
+                    t0, e0, lp0 = run(0.0, mu, nu)
                     if e0 <= usable:
                         return 0.0, (t0, e0, lp0), None, True
                     lo, above = 1e-6, (t0, e0)
                     break
-                t, e, lp = run(lo, mu)
+                t, e, lp = run(lo, mu, nu)
                 if e > usable:
                     above = (t, e)
                     break
@@ -482,7 +505,7 @@ def endurance_strategy(cfg: dict, track: Track, distance_km: float = 22.0, featu
             lo, above = hi, (t, e)
             for _ in range(40):
                 hi = lo * step
-                t, e, lp = run(hi, mu)
+                t, e, lp = run(hi, mu, nu)
                 if e <= usable or hi > 1e3:
                     break
                 lo, above = hi, (t, e)
@@ -493,8 +516,9 @@ def endurance_strategy(cfg: dict, track: Track, distance_km: float = 22.0, featu
             if hi / lo < rtol:
                 break
             mid = math.sqrt(lo * hi)
-            t, e, lp = run(mid, mu)
-            log(f"  lambda {mid:.4g} s/kJ" + (f", mu {mu:.4g}" if mu else "") + f": {t:.1f} s, {e:.3f} kWh")
+            t, e, lp = run(mid, mu, nu)
+            log(f"  lambda {mid:.4g} s/kJ" + (f", mu {mu:.4g}" if mu else "") + (f", nu {nu:.4g}" if nu else "")
+                + f": {t:.1f} s, {e:.3f} kWh")
             if e <= usable:
                 hi, best = mid, (t, e, lp)
             else:
@@ -514,48 +538,73 @@ def endurance_strategy(cfg: dict, track: Track, distance_km: float = 22.0, featu
             clock += lap_t * laps_k
         return th
 
-    def too_hot(th) -> bool:
-        c = None if th is None else th.cell
-        return (c is not None and c.derate and c.limit is not None and th.cell_peak is not None
-                and th.cell_peak > c.limit + TOL_K)
+    def too_hot(th, which: str = "cell") -> bool:
+        if th is None:
+            return False
+        model, peak = (th.cell, th.cell_peak) if which == "cell" else (th.motor, th.motor_peak)
+        return (model is not None and model.derate and model.limit is not None and peak is not None
+                and peak > model.limit + TOL_K)
+
+    def price(which: str, lam0: float, other: float):
+        """Smallest heat price for the cells (``which='cell'``, motor price ``other``) or the motor (cell
+        price ``other``) that keeps that part below its limit: (price, fit, temperatures) or None."""
+        def fit(p, guess, rtol):
+            return fit_energy(p, guess, rtol, other) if which == "cell" else fit_energy(other, guess, rtol, p)
+
+        lo, hi, ok = 0.0, max(10.0 * lam0, 1e-3), None
+        guess = lam0 or None
+        for _ in range(10):  # bracket the price (coarse lambda fits)
+            r = fit(hi, guess, 1.1)
+            guess = r[0] or guess
+            th_hi = temperatures(r[1][2])
+            if not too_hot(th_hi, which):
+                ok = (hi, r, th_hi)
+                break
+            lo, hi = hi, hi * 4.0
+        if ok is None:
+            return None
+        for _ in range(6):
+            if lo > 0.0 and hi / lo < 1.3:
+                break
+            mid = math.sqrt(lo * hi) if lo > 0.0 else 0.25 * hi
+            r = fit(mid, ok[1][0] or None, 1.1)
+            th_m = temperatures(r[1][2])
+            if too_hot(th_m, which):
+                lo = mid
+            else:
+                hi, ok = mid, (mid, r, th_m)
+        r = fit(ok[0], ok[1][0] or None, 1.03)  # final, tight lambda at the chosen price
+        th_f = temperatures(r[1][2])
+        if too_hot(th_f, which):
+            r, th_f = ok[1], ok[2]
+        return ok[0], r, th_f
 
     flat_t, flat_e, flat_laps = run(0.0)
     lam, best, above, feasible = fit_energy(0.0)
     th = temperatures(best[2])
-    mu, thermal_ok = 0.0, not too_hot(th)
-    if not thermal_ok and stages[0].dp.dq is not None:
+    mu = nu = 0.0
+    thermal_ok = True
+    if too_hot(th, "cell") and stages[0].dp.dq is not None:
         # price the cell heat (R I^2) as well: the smallest price that keeps the cells below their limit
         log("cells over their temperature limit: pricing the cell heat ...")
-        mu_lo, mu_hi, ok = 0.0, max(10.0 * lam, 1e-3), None
-        lam_guess = lam or None
-        for _ in range(10):  # bracket the price (coarse lambda fits)
-            r = fit_energy(mu_hi, lam_guess, rtol=1.1)
-            lam_guess = r[0] or lam_guess
-            th_hi = temperatures(r[1][2])
-            if not too_hot(th_hi):
-                ok = (mu_hi, r, th_hi)
-                break
-            mu_lo, mu_hi = mu_hi, mu_hi * 4.0
-        if ok is not None:
-            for _ in range(6):
-                if mu_lo > 0.0 and mu_hi / mu_lo < 1.3:
-                    break
-                mid = math.sqrt(mu_lo * mu_hi) if mu_lo > 0.0 else 0.25 * mu_hi
-                r = fit_energy(mid, ok[1][0] or None, rtol=1.1)
-                th_m = temperatures(r[1][2])
-                if too_hot(th_m):
-                    mu_lo = mid
-                else:
-                    mu_hi, ok = mid, (mid, r, th_m)
-            r = fit_energy(ok[0], ok[1][0] or None)  # final, tight lambda at the chosen price
-            th_f = temperatures(r[1][2])
-            if too_hot(th_f):
-                r, th_f = ok[1], ok[2]
-            mu, (lam, best, above, feasible), th = ok[0], r, th_f
-            thermal_ok = True
+        got = price("cell", lam, 0.0)
+        if got is None:
+            thermal_ok = False
+        else:
+            mu, (lam, best, above, feasible), th = got
+    if too_hot(th, "motor") and stages[0].dp.dqm is not None:
+        # then the motor heat (copper + iron losses), with the cell price kept
+        log("motor over its temperature limit: pricing the motor heat ...")
+        got = price("motor", lam, mu)
+        if got is None:
+            thermal_ok = False
+        else:
+            nu, (lam, best, above, feasible), th = got
+    thermal_ok = thermal_ok and not too_hot(th, "cell") and not too_hot(th, "motor")
     total_t, total_e, lp = best
     mixed = None
-    if feasible and mu == 0.0 and usable is not None and lam > 0.0 and above is not None and above[1] > total_e:
+    if feasible and mu == 0.0 and nu == 0.0 and usable is not None and lam > 0.0 and above is not None \
+            and above[1] > total_e:
         # driving part of the laps with the next-lower lambda uses the battery exactly: the mix of two
         # strategies is itself a strategy, linear in (energy, time). (Not when the cells limit: the other
         # strategy is hotter.)
@@ -569,7 +618,7 @@ def endurance_strategy(cfg: dict, track: Track, distance_km: float = 22.0, featu
     out = EnduranceStrategy(track.name, n_laps, usable, flat_t / n_laps, flat_e, cap, lam, total_t / n_laps, total_e,
                             first, lift_points(first), stages=stages,
                             stage_laps=[(a, b, c) for a, b, c, _ in lp], feasible=feasible and thermal_ok,
-                            mix=mixed, thermal=th, mu=mu)
+                            mix=mixed, thermal=th, mu=mu, nu=nu)
     if pareto:
         log("time-energy trade-off ...")
         dp0 = stages[0].dp

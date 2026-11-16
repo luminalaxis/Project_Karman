@@ -106,3 +106,15 @@ def test_energy_cli_writes_the_temperature_plot(tmp_path):
                      "--distance-km", "10", "--out", str(tmp_path)]) == 0
     assert (tmp_path / "thermal.png").exists()
     assert "cell temperature" in (tmp_path / "energy.txt").read_text(encoding="utf-8")
+
+
+def test_energy_optimal_driving_respects_the_motor_limit(thermal_cfg):
+    # cells cooled well, a weakly cooled motor with a low limit: the motor heat has to be priced
+    cfg = with_overrides(thermal_cfg, {"battery.thermal.cooling_W_per_K": 500.0,
+                                       "powertrain.ev.motor_thermal.conductance_W_per_K": 25.0,
+                                       "powertrain.ev.motor_thermal.max_C": 75.0})
+    st = endurance_strategy(cfg, Track.from_file(FSK_TRACK), 10.0, opts=SolverOptions.coarse(), pareto=False)
+    assert st.nu > 0.0 and st.mu == 0.0
+    assert st.thermal.motor_peak <= st.thermal.motor.limit + 0.05
+    assert st.feasible
+    assert "motor heat priced" in st.report()
