@@ -7,10 +7,11 @@ EV options (``powertrain.ev``):
   database (:mod:`aerolap.motors`), or
 * ``motor_torque_curve: [[rpm, Nm], ...]`` + ``max_rpm`` - a plain torque curve.
 
-``power_limit_kW`` is the accumulator (battery-side) limit, e.g. 80 kW in Formula Student; the
-effective limit is ``min(power_limit_kW, battery.max_power_kW)``. With a motor model the wheel
-force is ``T G eta_drivetrain / r`` and the battery power ``T omega / (eta_motor(n, T) eta_inverter)``;
-without one a single ``efficiency`` is used.
+``power_limit_kW`` is the accumulator (battery-side) limit, e.g. 80 kW in Formula Student; with a cell
+pack the effective limit is ``min(power_limit_kW, deliverable pack power)``. ``powertrain.efficiency`` is
+the drivetrain (gears, chain) efficiency: the wheel force is ``T G eta / r``; with a motor model the battery
+power is ``T omega / (eta_motor(n, T) eta_inverter)`` on top (default 0.97), without one ``P_wheel / eta``
+(default 0.9, OptimumLap's single "drive efficiency").
 
 Battery (``battery:``): with a ``cell`` section the pack model of :mod:`aerolap.battery` sets the
 deliverable power and the bus voltage (motor base speed) at ``battery.soc``; otherwise
@@ -46,7 +47,9 @@ def _curve(points, name: str):
 class Powertrain:
     def __init__(self, cfg: dict, tire_radius: float, battery: dict | None = None):
         self.type = cfg["type"]
-        self.efficiency = float(cfg["efficiency"])
+        eff = cfg.get("efficiency")
+        motor_model = cfg["type"] == "ev" and bool((cfg.get("ev") or {}).get("motor"))
+        self.efficiency = float(eff) if eff is not None else (0.97 if motor_model else 0.9)
         self.drive = cfg["drive"]
         self.differential = cfg["differential"]
         frac = cfg.get("awd_front_fraction")
@@ -62,8 +65,7 @@ class Powertrain:
         cap = b.get("capacity_kWh")
         self.battery_capacity = None if cap is None else float(cap) * 3.6e6  # J
         self.usable_fraction = float(b.get("usable_fraction", 0.95))
-        pack = b.get("max_power_kW")
-        self.pack_power = None if pack is None else float(pack) * 1000.0
+        self.pack_power = None
         self.regen_power = float(b.get("regen_power_kW") or 0.0) * 1000.0
         self.regen_share = float(b.get("regen_axle_share", 0.35))
         self.pack = BatteryPack.from_config(b)  # cell-based pack model (None: fixed limits only)
@@ -96,7 +98,6 @@ class Powertrain:
             if self.pack_voltage is not None:  # bus voltage at full power sets the motor base speed
                 c = {**c, "dc_voltage_V": self.pack_voltage}
             self.motor = Motor.from_config(c)
-            self.efficiency = float(c.get("drivetrain_efficiency", 0.97))
             self.inverter_efficiency = float(c.get("inverter_efficiency", 0.97))
             self.rev_limit = self.motor.max_rpm
             inertia = self.motor.rotor_inertia

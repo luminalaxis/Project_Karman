@@ -30,16 +30,16 @@ def _lap(cfg, track):
 
 def test_battery_parameters(ev_cfg):
     car = VehicleModel(with_overrides(ev_cfg, {"battery.capacity_kWh": 7.0, "battery.usable_fraction": 0.9,
-                                               "battery.max_power_kW": 60.0}))
+                                               "powertrain.ev.power_limit_kW": 60.0}))
     pt = car.powertrain
     assert pt.usable_energy == pytest.approx(7.0 * 0.9 * 3.6e6)
-    assert pt.power_limit == pytest.approx(60e3)  # pack limit below the 80 kW rule limit
+    assert pt.power_limit == pytest.approx(60e3)
     none = VehicleModel(with_overrides(ev_cfg, {"battery.capacity_kWh": None}))
     assert none.powertrain.usable_energy is None
 
 
 def test_pack_power_limit_caps_battery_power(ev_cfg):
-    cfg = with_overrides(ev_cfg, {"battery.max_power_kW": 50.0})
+    cfg = with_overrides(ev_cfg, {"powertrain.ev.power_limit_kW": 50.0})
     _, res = _lap(cfg, Track.straight(150.0))
     assert np.nanmax(res.channels["battery_power_kW"]) <= 50.0 * 1.01
 

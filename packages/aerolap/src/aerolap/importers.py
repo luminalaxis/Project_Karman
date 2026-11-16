@@ -481,8 +481,12 @@ def _vehicle_cfg_all(ol: OlVehicle, base_raw: dict, drive: str, full: bool,
                      "shift_time_s": 0.0}
     elif full and motor:
         base_ev = (base_raw.get("powertrain") or {}).get("ev", {})
-        ev = {k: base_ev[k] for k in ("drivetrain_efficiency", "inverter_efficiency", "power_limit_kW",
-                                      "n_motors") if k in base_ev}
+        ev = {k: base_ev[k] for k in ("inverter_efficiency", "power_limit_kW", "n_motors") if k in base_ev}
+        # the file's drive efficiency lumps motor + inverter + drivetrain; the motor model adds its own
+        # losses, so the drivetrain efficiency comes from the base car (or the motor-model default)
+        base_pt = base_raw.get("powertrain") or {}
+        pt["efficiency"] = base_ev.get("drivetrain_efficiency", base_pt.get("efficiency") if base_ev.get("motor")
+                                       else None) or 0.97
         ev.update(motor)
         ev["reduction_ratio"] = final * gears[0]
         pt["ev"] = ev

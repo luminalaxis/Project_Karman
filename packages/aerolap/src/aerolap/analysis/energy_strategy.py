@@ -583,7 +583,7 @@ def endurance_strategy(cfg: dict, track: Track, distance_km: float = 22.0, featu
         car0 = dp0.car
         p_hi = car0.powertrain.power_limit / 1000.0 if car0.powertrain.power_limit else 80.0
         for p_kw in np.linspace(0.45 * p_hi, p_hi, 6):
-            cc = with_overrides(c0, {"powertrain.ev.power_limit_kW": float(p_kw), "battery.max_power_kW": None},
+            cc = with_overrides(c0, {"powertrain.ev.power_limit_kW": float(p_kw)},
                                 f"출력 캡 {p_kw:.1f} kW")
             r = QSSSolver(opts).solve(VehicleModel(cc, features), track, start="flying")
             out.pareto_cap.append((r.energy_J / KWH, r.lap_time, float(p_kw)))

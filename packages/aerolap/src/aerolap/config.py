@@ -72,18 +72,18 @@ AXLE_DEFAULTS: dict[str, Any] = {
     "roll_center_mm": 30.0,
     "static_camber_deg": 0.0,  # negative = top of the wheel leans towards the chassis
     "camber_gain_deg_per_mm": 0.0,  # camber change per mm of bump (negative = gains negative camber)
-    "anti_dive": 0.0,  # front: fraction of braking pitch transfer carried by the links
-    "anti_lift": 0.0,  # rear: fraction of braking pitch transfer carried by the links
-    "anti_squat": 0.0,  # rear: fraction of driving pitch transfer carried by the links
     # transient solver only
     "damper_rate_Ns_per_mm": None,  # damper rate at the damper [N/(mm/s)]; null -> from damping_ratio
     "damping_ratio": 0.65,  # corner damping ratio used when damper_rate_Ns_per_mm is null
 }
+# anti geometry exists on one axle only: front links carry braking pitch (anti-dive), rear links braking
+# (anti-lift) and driving (anti-squat) pitch
+FRONT_AXLE_DEFAULTS: dict[str, Any] = {"anti_dive": 0.0}
+REAR_AXLE_DEFAULTS: dict[str, Any] = {"anti_lift": 0.0, "anti_squat": 0.0}
 
 STRATEGY_DEFAULTS: dict[str, Any] = {
     "type": "fixed",  # fixed | rule | ideal
     "open_mode": None,  # low-drag mode (default: first mode that is not default_mode)
-    "closed_mode": None,  # high-downforce mode (default: default_mode)
     "open_radius_m": 50.0,  # flap may open where the corner radius is larger than this
     "min_length_m": 10.0,  # ... over at least this distance
     "min_speed_kmh": 0.0,  # ... and only above this speed (low speed: rear grip is worth more)
@@ -125,7 +125,6 @@ DEFAULTS: dict[str, Any] = {
     "battery": {
         "capacity_kWh": None,  # nominal pack energy; null -> no energy check
         "usable_fraction": 0.95,  # usable share of the nominal energy (SOC window)
-        "max_power_kW": None,  # pack discharge capability; null -> only the powertrain limit
         "regen_power_kW": 0.0,  # recuperation power limit at the battery (0 = no regen)
         "regen_axle_share": 0.35,  # share of the braking force on the driven (rear) axle
     },
@@ -143,7 +142,7 @@ DEFAULTS: dict[str, Any] = {
     "powertrain": {
         "drive": "rwd",  # rwd | awd
         "differential": "lsd",  # lsd | open
-        "efficiency": 0.9,
+        "efficiency": None,  # drivetrain (gears, chain) efficiency; null -> 0.97 with a motor model, else 0.9
         "awd_front_fraction": None,  # None -> ideal torque split for awd
     },
 }
@@ -167,12 +166,14 @@ REQUIRED: tuple[str, ...] = (
 
 
 _AXLE_KEYS = set(AXLE_DEFAULTS) | {"spring_rate_N_per_mm", "static_ride_height_mm"}
+_FRONT_AXLE_KEYS = _AXLE_KEYS | set(FRONT_AXLE_DEFAULTS)
+_REAR_AXLE_KEYS = _AXLE_KEYS | set(REAR_AXLE_DEFAULTS)
 _COMPONENT_KEYS = {"cla", "cda", "cop_front", "scale", "drag_exponent", "points", "type", "span_m", "chord_m",
                    "elements", "aoa_deg", "x_mm", "height_mm", "endplate_factor", "e", "cl0", "cl_max", "cd0",
                    "lift_slope_2d", "ground_effect", "k_ground", "h_stall_mm", "range", "area_m2", "cl_ref",
                    "h_ref_mm", "height_exponent", "stall_mm", "rake_gain", "roll_loss", "yaw_loss", "cd_area",
                    "induced_k", "section_data", "section", "section_speed_kmh", "cl_factor",
-                   "cd_add", "flap_ranges", "core_area_m2", "exit_area_m2", "loss_coefficient", "inlet_recovery",
+                   "cd_add", "core_area_m2", "exit_area_m2", "loss_coefficient", "inlet_recovery",
                    "effectiveness", "coolant_temp_C", "body_cda", "heat_share", "enabled", "mass_kg", "section_fit"}
 _ELEMENT_KEYS = {"chord_mm", "deflection_deg", "gap_mm", "overlap_mm", "airfoil", "camber", "thickness", "range",
                  "enabled"}
@@ -190,10 +191,10 @@ KNOWN_KEYS: dict[str, set[str]] = {
               "vertical_rate_N_per_mm", "peak_slip_deg", "camber_optimum_deg", "camber_sensitivity_per_deg2",
               "rolling_resistance", "combined_exponent", "mf_file", "mf", "pressure_kPa", "mf_mu_scaling"},
     "suspension": {"front", "rear"},
-    "suspension.front": _AXLE_KEYS,
-    "suspension.rear": _AXLE_KEYS,
+    "suspension.front": _FRONT_AXLE_KEYS,
+    "suspension.rear": _REAR_AXLE_KEYS,
     "brakes": {"bias_front"},
-    "battery": {"capacity_kWh", "usable_fraction", "max_power_kW", "regen_power_kW", "regen_axle_share", "series",
+    "battery": {"capacity_kWh", "usable_fraction", "regen_power_kW", "regen_axle_share", "series",
                 "parallel", "soc", "soc_min", "soc_stages", "interconnect_resistance_mOhm", "max_current_A", "cell",
                 "thermal", "temperature_C"},
     "battery.cell": {"capacity_Ah", "resistance_mOhm", "max_current_A", "v_min", "ocv", "resistance_temp",
@@ -207,7 +208,7 @@ KNOWN_KEYS: dict[str, set[str]] = {
     "aero.strategy": set(STRATEGY_DEFAULTS),
     "powertrain": {"type", "drive", "differential", "efficiency", "awd_front_fraction", "ev", "ice"},
     "powertrain.ev": {"motor", "motor_variant", "motor_cooling", "dc_voltage_V", "controller_current_A", "n_motors",
-                      "reduction_ratio", "drivetrain_efficiency", "inverter_efficiency", "power_limit_kW",
+                      "reduction_ratio", "inverter_efficiency", "power_limit_kW",
                       "rotor_inertia_kgm2", "motor_torque_curve", "max_rpm", "motor_thermal"},
     "powertrain.ev.motor_thermal": {"coolant_C", "max_C", "start_C", "conductance_W_per_K", "heat_capacity_J_per_K",
                                     "cp_J_per_kgK", "derate"},
@@ -248,6 +249,94 @@ def unknown_keys(cfg: dict) -> list[str]:
     return out
 
 
+_DEV_COMMON = {"type", "enabled", "mass_kg", "heat_share", "cop_front", "range", "x_mm"}
+_WING_GEOM = {"span_m", "aoa_deg", "height_mm", "endplate_factor", "e"}
+# keys each kind of aero component reads (the others are accepted by the shared key set but do nothing)
+_DEVICE_USED = {
+    "wing+section": _DEV_COMMON | _WING_GEOM | {"section_data", "section", "section_speed_kmh", "cl_factor", "cd_add",
+                                               "elements", "section_fit", "ground_effect"},
+    "wing+elements": _DEV_COMMON | _WING_GEOM | {"ground_effect", "cl_factor", "cd_add", "elements"},
+    "wing": _DEV_COMMON | _WING_GEOM | {"chord_m", "elements", "cl0", "cl_max", "cd0", "lift_slope_2d", "ground_effect",
+                                       "k_ground", "h_stall_mm"},
+    "floor": _DEV_COMMON | {"area_m2", "cl_ref", "height_mm", "h_ref_mm", "height_exponent", "stall_mm", "rake_gain",
+                            "roll_loss", "yaw_loss", "cd_area", "induced_k", "scale"},
+    "sidepod": _DEV_COMMON | {"core_area_m2", "exit_area_m2", "loss_coefficient", "inlet_recovery", "effectiveness",
+                              "coolant_temp_C", "body_cda", "cla"},
+    "": {"cla", "cda", "cop_front", "scale", "drag_exponent", "points", "enabled", "mass_kg", "heat_share"},
+}
+_SIMPLE_TYRE_KEYS = ("load_sensitivity", "min_mu_factor", "peak_slip_deg", "camber_optimum_deg",
+                     "camber_sensitivity_per_deg2")
+_CONST_AERO_KEYS = ("cl", "cd", "cla", "cda", "frontal_area_m2", "cop_front")
+
+
+def _device_kind(c: dict) -> str:
+    kind = str(c.get("type") or "").lower()
+    if kind != "wing":
+        return kind
+    if c.get("section_data"):
+        return "wing+section"
+    return "wing+elements" if isinstance(c.get("elements"), (dict, list)) else "wing"
+
+
+def _set(node: dict, section: str, key: str) -> bool:
+    """``key`` holds a value other than null and its default (a saved full config repeats the defaults)."""
+    v = node.get(key)
+    return v is not None and v != DEFAULTS.get(section, {}).get(key)
+
+
+def inactive_keys(raw: dict) -> list[str]:
+    """Messages for keys that are valid but do nothing with the rest of this file (another key or model
+    takes over). ``raw`` is the vehicle file as written, before defaults."""
+    out: list[str] = []
+    tires = raw.get("tires") or {}
+    if tires.get("mf_file") or tires.get("mf"):
+        dead = [k for k in _SIMPLE_TYRE_KEYS if _set(tires, "tires", k)]
+        if dead:
+            out.append("tires: " + ", ".join(dead) + " - simple tyre model keys, not used with a Magic Formula "
+                       "tyre (tires.mf_file)")
+    else:
+        dead = [k for k in ("pressure_kPa", "mf_mu_scaling") if _set(tires, "tires", k)]
+        if dead:
+            out.append("tires: " + ", ".join(dead) + " - only used with a Magic Formula tyre (tires.mf_file)")
+    bat = raw.get("battery") or {}
+    if bat.get("cell"):
+        dead = [f"battery.{k}" for k in ("capacity_kWh", "usable_fraction") if _set(bat, "battery", k)]
+        if ((raw.get("powertrain") or {}).get("ev") or {}).get("dc_voltage_V") is not None:
+            dead.append("powertrain.ev.dc_voltage_V")
+        if dead:
+            out.append(", ".join(dead) + " - not used with the cell pack model (battery.cell sets energy and bus "
+                       "voltage from series / parallel / soc)")
+    aero = raw.get("aero") or {}
+    kind = str(aero.get("type", "constant"))
+    top = [k for k in _CONST_AERO_KEYS if k in aero]
+    if kind != "constant" and (top or "modes" in aero):
+        out.append(f"aero: {', '.join(top + (['modes'] if 'modes' in aero else []))} - not used with aero.type: {kind}")
+    elif aero.get("modes") and top:
+        out.append(f"aero: {', '.join(top)} - not used when aero.modes is set (each mode has its own values)")
+    if kind == "constant" and aero.get("file"):
+        out.append("aero.file - not used with aero.type: constant")
+    nodes = [("aero", aero)] + [(f"aero.modes.{m}", v) for m, v in (aero.get("modes") or {}).items()
+                                if isinstance(v, dict)]
+    for where, node in nodes:
+        for a, b in (("cla", "cl"), ("cda", "cd")):
+            if a in node and b in node:
+                out.append(f"{where}.{b} - not used: {where}.{a} is set and wins")
+    for name, c in (aero.get("components") or {}).items():
+        if not isinstance(c, dict):
+            continue
+        k = _device_kind(c)
+        used = _DEVICE_USED.get(k)
+        dead = sorted(key for key in c if used is not None and key not in used and key in _COMPONENT_KEYS)
+        if dead:
+            label = {"": "simple component (no type)", "wing+section": "wing with section_data",
+                     "wing+elements": "wing with elements"}.get(k, f"type: {k}")
+            out.append(f"aero.components.{name}: {', '.join(dead)} - not used by a {label}")
+        els = c.get("elements")
+        if isinstance(els, dict) and isinstance(els.get("main"), dict) and "range" in els["main"]:
+            out.append(f"aero.components.{name}.elements.main.range - not used (the main element angle is aoa_deg)")
+    return out
+
+
 def deep_merge(base: dict, override: dict) -> dict:
     """Return a new dict with ``override`` merged recursively on top of ``base``."""
     out = copy.deepcopy(base)
@@ -259,11 +348,69 @@ def deep_merge(base: dict, override: dict) -> dict:
     return out
 
 
+def migrate(raw: dict) -> tuple[dict, list[str]]:
+    """Move keys that were removed or merged to their current place; one message per moved key.
+
+    * ``powertrain.ev.drivetrain_efficiency`` -> ``powertrain.efficiency`` (one drivetrain efficiency;
+      the motor model adds the motor and inverter losses on top)
+    * ``battery.max_power_kW`` -> ``powertrain.ev.power_limit_kW`` (the smaller of the two; with a cell
+      pack the pack model sets the deliverable power, so the value is dropped)
+    * ``aero.strategy.closed_mode`` -> ``aero.default_mode`` (the closed / fixed mode is the default mode)
+    * ``aero.components.<n>.flap_ranges`` - removed (flap ranges come from ``elements.<flap>.range``)
+    """
+    raw = copy.deepcopy(raw)
+    msgs: list[str] = []
+    pt = raw.get("powertrain")
+    ev = pt.get("ev") if isinstance(pt, dict) else None
+    if isinstance(ev, dict) and "drivetrain_efficiency" in ev:
+        val = ev.pop("drivetrain_efficiency")
+        old = pt.get("efficiency")
+        if ev.get("motor") or old is None:
+            pt["efficiency"] = val
+            msgs.append(f"'powertrain.ev.drivetrain_efficiency' ({_fmt(val)}) moved to 'powertrain.efficiency'"
+                        + (f" (replaces {_fmt(old)}, which the motor model did not use)" if old is not None else ""))
+        else:
+            msgs.append("'powertrain.ev.drivetrain_efficiency' removed: without a motor model "
+                        f"'powertrain.efficiency' ({_fmt(old)}) is the drivetrain efficiency")
+    bat = raw.get("battery")
+    if isinstance(bat, dict) and "max_power_kW" in bat:
+        val = bat.pop("max_power_kW")
+        if val is not None:
+            if bat.get("cell"):
+                msgs.append(f"'battery.max_power_kW' ({_fmt(val)}) removed: the cell pack model sets the deliverable"
+                            " power (battery.cell, max_current_A)")
+            elif isinstance(ev, dict):
+                lim = ev.get("power_limit_kW")
+                ev["power_limit_kW"] = float(val) if lim is None else min(float(lim), float(val))
+                msgs.append(f"'battery.max_power_kW' ({_fmt(val)}) merged into 'powertrain.ev.power_limit_kW'"
+                            f" -> {_fmt(ev['power_limit_kW'])}")
+            else:
+                msgs.append("'battery.max_power_kW' removed (only used by an EV)")
+    aero = raw.get("aero")
+    strat = aero.get("strategy") if isinstance(aero, dict) else None
+    if isinstance(strat, dict) and "closed_mode" in strat:
+        val = strat.pop("closed_mode")
+        if val is not None and val != aero.get("default_mode"):
+            msgs.append(f"'aero.strategy.closed_mode' ({val!r}) moved to 'aero.default_mode'"
+                        + (f" (was {aero['default_mode']!r})" if aero.get("default_mode") is not None else ""))
+            aero["default_mode"] = val
+        else:
+            msgs.append("'aero.strategy.closed_mode' removed: the closed mode is 'aero.default_mode'")
+    for name, comp in ((aero or {}).get("components") or {}).items() if isinstance(aero, dict) else ():
+        if isinstance(comp, dict) and "flap_ranges" in comp:
+            comp.pop("flap_ranges")
+            msgs.append(f"'aero.components.{name}.flap_ranges' removed: set each flap's range in "
+                        f"'aero.components.{name}.elements.<flap>.range'")
+    return raw, msgs
+
+
 def apply_defaults(raw: dict) -> dict:
+    raw, moved = migrate(raw)
     cfg = deep_merge(DEFAULTS, raw)
+    cfg["_migrated"] = moved + inactive_keys(raw)
     susp = cfg.setdefault("suspension", {})
-    for axle in ("front", "rear"):
-        susp[axle] = deep_merge(AXLE_DEFAULTS, susp.get(axle, {}) or {})
+    for axle, own in (("front", FRONT_AXLE_DEFAULTS), ("rear", REAR_AXLE_DEFAULTS)):
+        susp[axle] = deep_merge({**AXLE_DEFAULTS, **own}, susp.get(axle, {}) or {})
     cfg["aero"]["strategy"] = deep_merge(STRATEGY_DEFAULTS, cfg["aero"].get("strategy") or {})
     # a simple component's design variable is its scale (default 1): write it in, so sweeps / exchange /
     # aero-split that read aero.components.<name>.scale work when the file leaves it out
@@ -390,7 +537,7 @@ def load_vehicle_config(path: str | Path, warn: bool = True) -> dict:
     cfg["_base_dir"] = str(base_dir)
     cfg["_source"] = str(path)
     validate(cfg)
-    cfg["_warnings"] = unknown_keys(cfg)
+    cfg["_warnings"] = cfg.pop("_migrated", []) + unknown_keys(cfg)
     cfg["_notes"] = notes
     if warn:
         import sys
@@ -437,6 +584,7 @@ def _default_ol_base() -> Path:
 
 def vehicle_config_from_dict(raw: dict, base_dir: str | Path = ".") -> dict:
     cfg = apply_defaults(raw)
+    cfg["_warnings"] = cfg.pop("_migrated", [])
     cfg["_base_dir"] = str(Path(base_dir).resolve())
     validate(cfg)
     return cfg

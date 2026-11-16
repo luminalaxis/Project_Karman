@@ -342,7 +342,7 @@ def endurance_energy(cfg: dict, track: Track, distance_km: float = 22.0, feature
     def capped(p_kw: float) -> _Run:
         key = round(float(p_kw), 6)
         if key not in memo:
-            c = with_overrides(cfg, {"powertrain.ev.power_limit_kW": key, "battery.max_power_kW": None},
+            c = with_overrides(cfg, {"powertrain.ev.power_limit_kW": key},
                                f"내구 출력 캡 탐색 ({key:.1f} kW)")
             memo[key] = _run(c, features, track, laps, opts, run.dq_first)
         return memo[key]

@@ -90,3 +90,39 @@ def test_fixed_point_converges_on_whole_envelope(ev_cfg):
     for table in (g.ax_acc, g.ax_brk):
         st = car.solve_state(V, table, F * g.ay_max[:, None])
         assert st.converged.all()
+
+
+
+def test_removed_keys_are_migrated_with_a_warning(simple_raw):
+    from aerolap.config import vehicle_config_from_dict
+
+    del simple_raw["powertrain"]["efficiency"]
+    simple_raw["powertrain"]["ev"]["drivetrain_efficiency"] = 0.95
+    simple_raw["battery"] = {"max_power_kW": 50.0}
+    cfg = vehicle_config_from_dict(simple_raw)
+    assert cfg["powertrain"]["efficiency"] == 0.95
+    assert cfg["powertrain"]["ev"]["power_limit_kW"] == 50.0  # min(60 rule limit, 50 pack)
+    assert "max_power_kW" not in cfg["battery"]
+    assert len(cfg["_warnings"]) == 2
+
+
+def test_anti_keys_belong_to_one_axle(simple_raw, tmp_path):
+    import yaml
+
+    from aerolap.config import load_vehicle_config
+
+    simple_raw["suspension"]["front"]["anti_squat"] = 0.3
+    p = tmp_path / "car.yaml"
+    p.write_text(yaml.safe_dump(simple_raw))
+    cfg = load_vehicle_config(p, warn=False)
+    assert any("suspension.front.anti_squat" in w for w in cfg["_warnings"])
+
+
+def test_inactive_keys_flag_keys_another_model_overrides():
+    from aerolap.config import inactive_keys
+
+    msgs = inactive_keys({"tires": {"mf_file": "x.tir", "peak_slip_deg": 7.0},
+                          "aero": {"cla": 1.0, "cl": 2.0, "components": {"fl": {"type": "floor", "span_m": 1.0}}}})
+    assert any("peak_slip_deg" in m for m in msgs)
+    assert any("aero.cl " in m for m in msgs)
+    assert any("span_m" in m and "floor" in m for m in msgs)
