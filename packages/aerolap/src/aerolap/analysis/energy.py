@@ -128,6 +128,16 @@ class EnduranceEnergy:
             lines.append(f"  aero drag = {b['aero_drag_share_of_battery'] * 100:.0f} % of the battery energy"
                          + (f", pack R I^2 = {b['battery_loss_kWh'] * 1000:.1f} Wh/lap" if b.get("battery_loss_kWh")
                             else ""))
+        if self.result is not None:
+            ps = self.result.power_stats()
+            if "motor_peak_kW" in ps:
+                lines.append(f"  motor power:     peak {ps['motor_peak_kW']:.1f} kW, mean {ps['motor_mean_kW']:.1f} kW "
+                             f"(driving {ps['motor_mean_drive_kW']:.1f} kW)"
+                             + (f", regen peak {ps['motor_peak_regen_kW']:.1f} kW" if "motor_peak_regen_kW" in ps
+                                else ""))
+            if "battery_peak_kW" in ps:
+                lines.append(f"  battery power:   peak {ps['battery_peak_kW']:.1f} kW, mean {ps['battery_mean_kW']:.1f} kW"
+                             " (net)")
         if self.stages:
             hot = any(st.temp_start is not None for st in self.stages)
             lines.append("  SOC stages (pack model):   laps   SOC start -> end   lap [s]   P_max [kW]   V_min [V]"

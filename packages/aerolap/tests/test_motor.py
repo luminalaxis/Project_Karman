@@ -70,3 +70,20 @@ def test_lap_energy_uses_motor_efficiency(ev_cfg):
     assert np.nanmax(ch["battery_power_kW"]) <= 80.0 * 1.01
     mech = np.nansum(ch["drive_power_kW"][:-1] * np.diff(res.t)) * 1000.0
     assert res.energy_J > mech  # losses on top of the energy at the wheels
+
+
+def test_motor_peak_and_mean_power(ev_cfg):
+    from aerolap.solvers.qss import QSSSolver
+    from aerolap.track import Track
+    from aerolap.vehicle import VehicleModel
+
+    car = VehicleModel(ev_cfg)
+    res = QSSSolver().solve(car, Track.straight(200.0), start="standing")
+    ch = res.channels
+    p = ch["motor_torque_Nm"] * ch["motor_rpm"] * 2 * np.pi / 60 * car.powertrain.n_motors / 1000
+    st = res.summary()
+    assert st["motor_peak_kW"] == pytest.approx(p.max())
+    dt = np.diff(res.t)
+    assert st["motor_mean_kW"] == pytest.approx((0.5 * (p[1:] + p[:-1]) * dt).sum() / dt.sum())
+    assert st["motor_mean_kW"] <= st["motor_mean_drive_kW"] <= st["motor_peak_kW"]
+    assert st["motor_elec_peak_kW"] > st["motor_peak_kW"]  # motor losses

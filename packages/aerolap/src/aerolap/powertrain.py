@@ -165,23 +165,35 @@ class Powertrain:
             return None
         return self.battery_capacity * self.usable_fraction
 
-    def regen_battery_power(self, v, f_brake):
-        """Power returned to the battery (W >= 0) while braking with ``f_brake`` (N) at the tyres."""
+    def _regen_eta(self, v, f):
+        """(battery-side efficiency, per-motor torque) of a regen force ``f`` at the wheels."""
+        if self.motor is None:
+            return np.full(np.shape(f), self.efficiency), np.zeros(np.shape(f))
+        rpm = self.motor_rpm(v)
+        t = f * self.radius / (self.ratios[0] * self.n_motors)
+        return self.motor.efficiency(rpm, t) * self.inverter_efficiency * self.efficiency, t
+
+    def regen_force(self, v, f_brake):
+        """Regenerative braking force at the wheels (N >= 0) for a braking demand ``f_brake`` (N): the
+        driven axle's share of the braking, limited by the motor torque and the battery regen power."""
         f_brake = np.maximum(np.asarray(f_brake, dtype=float), 0.0)
         if self.type != "ev" or self.regen_power <= 0.0:
             return np.zeros(np.shape(f_brake))
         v = np.maximum(np.asarray(v, dtype=float), 0.0)
         f = self.regen_share * f_brake
         if self.motor is not None:
-            rpm = self.motor_rpm(v)
-            t_max = self.motor.max_torque(rpm) * self.n_motors
+            t_max = self.motor.max_torque(self.motor_rpm(v)) * self.n_motors
             f = np.minimum(f, t_max * self.ratios[0] / self.radius)
-            t = f * self.radius / (self.ratios[0] * self.n_motors)
-            eta = self.motor.efficiency(rpm, t) * self.inverter_efficiency * self.efficiency
-        else:
-            eta = self.efficiency
-        p = f * v * eta
-        return np.minimum(p, self.regen_power)
+        eta, _ = self._regen_eta(v, f)
+        p_cap = self.regen_power / np.maximum(v * eta, 1e-6)  # battery power limit as a wheel force
+        return np.minimum(f, p_cap)
+
+    def regen_battery_power(self, v, f_brake):
+        """Power returned to the battery (W >= 0) while braking with ``f_brake`` (N) at the tyres."""
+        v = np.maximum(np.asarray(v, dtype=float), 0.0)
+        f = self.regen_force(v, f_brake)
+        eta, _ = self._regen_eta(v, f)
+        return np.minimum(f * v * eta, self.regen_power)
 
     def gear_lookup(self, v_max: float, step: float = 0.05):
         """Pre-computed best-gear table for fast scalar lookups in the speed integration."""

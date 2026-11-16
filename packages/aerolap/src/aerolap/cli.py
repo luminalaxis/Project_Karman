@@ -117,7 +117,9 @@ def cmd_transient(args) -> int:
     qss = solver.qss_reference
     sq, st = qss.summary(), tr.summary()
     keys = ["lap_time_s", "v_max_kmh", "v_min_kmh", "drive_energy_kWh", "min_clearance_mm", "min_rh_front_mm",
-            "min_rh_rear_mm", "bottoming_m", "max_roll_deg", "max_yaw_deg", "non_default_mode_pct"]
+            "min_rh_rear_mm", "bottoming_m", "max_roll_deg", "max_yaw_deg", "non_default_mode_pct",
+            "motor_peak_kW", "motor_mean_kW", "motor_mean_drive_kW", "battery_peak_kW", "battery_mean_kW"]
+    keys = [k for k in keys if k in st and k in sq]
     if "max_path_error_m" in st:
         keys.append("max_path_error_m")
         sq.setdefault("max_path_error_m", 0.0)

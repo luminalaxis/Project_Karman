@@ -76,6 +76,40 @@ class LapResult:
             out["max_path_error_m"] = float(np.nanmax(np.abs(ch["path_error_m"])))
         if "bottoming" in ch:
             out["bottoming_m"] = float((ch["bottoming"][:-1] * ds).sum())
+        out.update(self.power_stats())
+        return out
+
+    def power_stats(self) -> dict[str, float]:
+        """Peak and time-averaged power of the motor(s) (all motors together) and the battery.
+
+        ``*_mean_kW`` is the average over the whole lap (drive output only: braking counts as 0),
+        ``*_mean_drive_kW`` the average while driving (power > 0); electrical and battery means are net
+        (regen subtracted)."""
+        ch = self.channels
+        dt = np.diff(self.t)
+        total = max(float(dt.sum()), 1e-9)
+
+        def mid(x):
+            return 0.5 * (x[1:] + x[:-1])
+
+        out: dict[str, float] = {}
+        for key, name in (("motor_power_kW", "motor"), ("motor_elec_power_kW", "motor_elec"),
+                          ("battery_power_kW", "battery")):
+            p = ch.get(key)
+            if p is None or not np.any(np.isfinite(p)):
+                continue
+            p = np.nan_to_num(np.asarray(p, dtype=float))
+            pm = mid(p)
+            out[f"{name}_peak_kW"] = float(p.max())
+            if name == "motor":
+                drive = pm > 0.0
+                out["motor_mean_kW"] = float((np.maximum(pm, 0.0) * dt).sum() / total)
+                t_drive = float(dt[drive].sum())
+                out["motor_mean_drive_kW"] = float((pm[drive] * dt[drive]).sum() / t_drive) if t_drive > 0 else 0.0
+                if np.any(p < 0.0):
+                    out["motor_peak_regen_kW"] = float(-p.min())
+            else:
+                out[f"{name}_mean_kW"] = float((pm * dt).sum() / total)
         return out
 
     def to_csv(self, path: str | Path) -> None:
@@ -110,9 +144,10 @@ def powertrain_channels(vehicle, v, ax, f_drive, dt, f_brake=None) -> tuple[dict
     p_src = pt.battery_power(v, f_motor)
     if f_brake is not None and pt.regen_power > 0.0:
         p_regen = pt.regen_battery_power(v, f_brake)
+        f_regen = pt.regen_force(v, f_brake)
         p_src = p_src - p_regen
     else:
-        p_regen = None
+        p_regen = f_regen = None
     ch = {"drive_power_kW": np.maximum(f_drive, 0.0) * v / 1000.0}
     if pt.type == "ev":
         rpm, torque, eta = pt.motor_point(v, f_motor)
@@ -123,6 +158,15 @@ def powertrain_channels(vehicle, v, ax, f_drive, dt, f_brake=None) -> tuple[dict
         ch["motor_torque_Nm"] = torque
         if pt.motor is not None:
             ch["motor_efficiency"] = np.where(torque > 0.5, eta, np.nan)
+        # shaft power of all motors (+ drive, - regen) and their electrical power (inverter side)
+        p_mech = torque * rpm * 2.0 * np.pi / 60.0 * pt.n_motors
+        p_elec = np.where(p_mech > 0.0, p_mech / np.maximum(eta, 1e-6), 0.0)
+        if f_regen is not None:
+            p_shaft_regen = f_regen * np.maximum(v, 0.0) * pt.efficiency
+            p_mech = p_mech - p_shaft_regen
+            p_elec = p_elec - p_regen / pt.inverter_efficiency
+        ch["motor_power_kW"] = p_mech / 1000.0
+        ch["motor_elec_power_kW"] = p_elec / 1000.0
     if pt.type == "ev" and pt.pack is not None:  # cell energy = terminal energy + R I^2
         i = pt.pack.current(p_src)
         loss = pt.pack.resistance * i * i
