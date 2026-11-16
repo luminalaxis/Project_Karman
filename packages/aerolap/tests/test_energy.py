@@ -57,12 +57,25 @@ def test_breakdown_balances_and_more_drag_costs_energy(ev_cfg, loop):
     assert b2["battery_kWh"] > b["battery_kWh"]
 
 
-def test_regen_returns_energy_without_changing_the_lap(ev_cfg, loop):
-    _, plain = _lap(ev_cfg, loop)
-    _, regen = _lap(with_overrides(ev_cfg, {"battery.regen_power_kW": 30.0}), loop)
-    assert regen.lap_time == pytest.approx(plain.lap_time, rel=1e-9)
+def test_regen_returns_energy_and_ideal_blending_keeps_the_lap(ev_cfg, loop):
+    ideal = with_overrides(ev_cfg, {"brakes.bias_front": None})
+    _, plain = _lap(ideal, loop)
+    _, regen = _lap(with_overrides(ideal, {"battery.regen_power_kW": 30.0}), loop)
+    # with an ideal (blended) brake split the friction brakes only top up: same braking limit
+    assert regen.lap_time == pytest.approx(plain.lap_time, rel=1e-3)
     assert regen.energy_J < plain.energy_J
     assert np.nanmax(regen.channels["regen_power_kW"]) <= 30.0 + 1e-6
+    assert np.all(regen.channels["regen_force_N"] <= regen.channels["brake_force_N"] + 1e-6)
+
+
+def test_regen_moves_the_brake_balance_rearwards(ev_cfg):
+    from aerolap.vehicle import VehicleModel
+
+    fixed = with_overrides(ev_cfg, {"brakes.bias_front": 0.65})
+    a = VehicleModel(fixed).solve_state(20.0, -12.0, 0.0)
+    b = VehicleModel(with_overrides(fixed, {"battery.regen_power_kW": 60.0})).solve_state(20.0, -12.0, 0.0)
+    assert float(b.fx_regen) > 0.0
+    assert float(b.u_rear) > float(a.u_rear) and float(b.u_front) < float(a.u_front)
 
 
 def test_endurance_derates_power_to_fit_the_battery(ev_cfg, loop):

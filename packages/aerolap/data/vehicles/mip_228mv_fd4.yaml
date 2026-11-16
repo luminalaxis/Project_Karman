@@ -132,4 +132,3 @@ battery:
     - - 1.0
       - 4.18
   regen_power_kW: 0
-  regen_axle_share: 0.35

@@ -257,7 +257,7 @@ class QSSSolver:
                  "downforce_N", "drag_N", "fz_fl_N", "fz_fr_N", "fz_rl_N", "fz_rr_N",
                  "camber_fl_deg", "camber_fr_deg", "camber_rl_deg", "camber_rr_deg",
                  "u_front", "u_rear", "u_power", "understeer_index", "drive_force_N", "brake_force_N",
-                 "drive_power_kW"]
+                 "drive_power_kW", "regen_force_N"]
         for k in names:
             ch[k] = np.full(n, np.nan)
         limit = np.zeros(n, dtype=int)
@@ -302,6 +302,7 @@ class QSSSolver:
             ch["understeer_index"][sel] = st.understeer_index
             ch["drive_force_N"][sel] = st.fx_drive
             ch["brake_force_N"][sel] = st.fx_brake
+            ch["regen_force_N"][sel] = st.fx_regen
             ch["drive_power_kW"][sel] = st.fx_drive * v[sel] / 1000.0
             limit[sel] = st.limit
             flags["bottoming"][sel] = st.bottoming
@@ -320,7 +321,8 @@ class QSSSolver:
             ch["grade_pct"] = np.zeros(n) if g_node is None else 100.0 * g_node / np.sqrt(1.0 - g_node * g_node)  # rise / run
         for k, val in flags.items():
             ch[k] = val
-        pch, energy = powertrain_channels(vehicle, v, ax, ch["drive_force_N"], dt, ch["brake_force_N"])
+        pch, energy = powertrain_channels(vehicle, v, ax, ch["drive_force_N"], dt, ch["brake_force_N"],
+                                          ch["regen_force_N"])
         ch.update(pch)
         x, y = trk.xy()
         return LapResult(

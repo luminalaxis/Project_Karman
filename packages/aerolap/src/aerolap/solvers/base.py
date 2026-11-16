@@ -133,18 +133,20 @@ class LapResult:
                 w.writerow(row)
 
 
-def powertrain_channels(vehicle, v, ax, f_drive, dt, f_brake=None) -> tuple[dict[str, np.ndarray], float]:
+def powertrain_channels(vehicle, v, ax, f_drive, dt, f_brake=None, f_regen=None) -> tuple[dict[str, np.ndarray], float]:
     """Battery / motor channels and the energy drawn over a lap.
 
     ``f_drive`` is the tractive force at the tyres; the motor additionally accelerates the rotating
-    driveline (``powertrain.m_rot``). ``dt`` is the time of each interval between samples.
+    driveline (``powertrain.m_rot``). ``dt`` is the time of each interval between samples. ``f_regen``
+    is the regenerative part of ``f_brake`` (default: all the motor / battery take).
     """
     pt = vehicle.powertrain
     f_motor = np.maximum(f_drive, 0.0) + pt.m_rot * np.maximum(ax, 0.0) * (np.asarray(f_drive) > 0.0)
     p_src = pt.battery_power(v, f_motor)
-    if f_brake is not None and pt.regen_power > 0.0:
-        p_regen = pt.regen_battery_power(v, f_brake)
-        f_regen = pt.regen_force(v, f_brake)
+    if f_brake is not None and pt.has_regen:
+        if f_regen is None:
+            f_regen = pt.regen_force(v, f_brake)
+        p_regen = pt.regen_battery_power(v, f_brake, f_regen)
         p_src = p_src - p_regen
     else:
         p_regen = f_regen = None
@@ -161,10 +163,12 @@ def powertrain_channels(vehicle, v, ax, f_drive, dt, f_brake=None) -> tuple[dict
         # shaft power of all motors (+ drive, - regen) and their electrical power (inverter side)
         p_mech = torque * rpm * 2.0 * np.pi / 60.0 * pt.n_motors
         p_elec = np.where(p_mech > 0.0, p_mech / np.maximum(eta, 1e-6), 0.0)
-        if f_regen is not None:
+        if p_regen is not None:
             p_shaft_regen = f_regen * np.maximum(v, 0.0) * pt.efficiency
             p_mech = p_mech - p_shaft_regen
             p_elec = p_elec - p_regen / pt.inverter_efficiency
+        if p_regen is not None:
+            ch["regen_force_N"] = np.asarray(f_regen, dtype=float) + 0.0 * v
         ch["motor_power_kW"] = p_mech / 1000.0
         ch["motor_elec_power_kW"] = p_elec / 1000.0
     if pt.type == "ev" and pt.pack is not None:  # cell energy = terminal energy + R I^2

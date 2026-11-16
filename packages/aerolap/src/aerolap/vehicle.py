@@ -72,6 +72,7 @@ class VehicleState:
     wheel_lift: np.ndarray
     converged: np.ndarray = field(default=None)  # type: ignore[assignment]
     plank: np.ndarray = field(default=None)  # type: ignore[assignment]  # N, floor contact force (both axles)
+    fx_regen: np.ndarray = field(default=None)  # type: ignore[assignment]  # N, regenerative part of fx_brake
 
     @property
     def cla(self):
@@ -473,12 +474,26 @@ class VehicleModel:
             share = _safe_ratio(cf, cf + cr, default=0.5)
             fd_f, fd_r = share * f_drive, (1.0 - share) * f_drive
         # Brakes: equal pressure left/right -> equal force per wheel on an axle.
+        cf, cr = 2.0 * min_f * lat_f, 2.0 * min_r * lat_r
         if self.brake_bias is None:
-            cf, cr = 2.0 * min_f * lat_f, 2.0 * min_r * lat_r
             share = _safe_ratio(cf, cf + cr, default=self.wd_front)
         else:
             share = self.brake_bias
-        fb_f, fb_r = share * f_brake, (1.0 - share) * f_brake
+        f_regen = 0.0 * f_brake
+        if pt.has_regen and pt.drive == "rwd":
+            # the motor brakes the rear axle first (up to what its tyres take); the friction brakes add
+            # the rest by the bias - with an ideal (adjustable) bias they only top up to the ideal split
+            f_regen = pt.regen_force(v, f_brake, cr)
+            fric = f_brake - f_regen
+            if self.brake_bias is None:
+                fb_r = np.maximum((1.0 - share) * f_brake, f_regen)
+                fb_f = f_brake - fb_r
+            else:
+                fb_f, fb_r = share * fric, (1.0 - share) * fric + f_regen
+        else:
+            if pt.has_regen:  # awd: regen on both axles in the brake split, no balance change
+                f_regen = pt.regen_force(v, f_brake, cf + cr)
+            fb_f, fb_r = share * f_brake, (1.0 - share) * f_brake
         ux_f = _safe_ratio(fd_f, den_drive_f) + _safe_ratio(fb_f, 2.0 * min_f)
         ux_r = _safe_ratio(fd_r, den_drive_r) + _safe_ratio(fb_r, 2.0 * min_r)
         if n_ell == 2.0:
@@ -497,7 +512,7 @@ class VehicleModel:
             "fx_cap": fx_cap, "fy_cap": fy_cap, "uy_f": uy_f, "uy_r": uy_r, "alpha_f": alpha_f,
             "alpha_r": alpha_r, "beta": beta, "steer": steer, "f_drive": f_drive, "f_brake": f_brake,
             "u_front": u_front, "u_rear": u_rear, "u_power": u_power, "limit": np.argmax(stack, axis=0),
-            "ux_f": ux_f, "ux_r": ux_r,
+            "ux_f": ux_f, "ux_r": ux_r, "f_regen": f_regen,
             "utilization": stack.max(axis=0), "understeer_index": usi,
         }
 
@@ -538,6 +553,7 @@ class VehicleModel:
         state = self.make_state(v, ax, ay, mode, rh_f, rh_r, roll, yaw, cla_f, cla_r, cda, oor, df_f, df_r,
                                 drag, sr["fz"], sr["camber"], sr["wheel_lift"], g)
         state.plank = _b(sr["plank"], state.utilization.shape)
+        state.fx_regen = _b(g["f_regen"], state.utilization.shape)
         beta = g["beta"]
         new_attitude = (sr["rh_f"], sr["rh_r"], sr["roll"], beta if self.features.roll_yaw_aero else 0.0 * beta)
         return state, new_attitude

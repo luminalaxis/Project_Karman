@@ -394,7 +394,7 @@ class TransientSolver:
         rec: dict[str, list] = {k: [] for k in (
             "t", "s", "v", "ax", "kappa", "rh_f", "rh_r", "roll", "yaw", "pitch", "clearance", "cla_f",
             "cla_r", "cda", "fl", "fr", "rl", "rr", "cfl", "cfr", "crl", "crr", "u_front", "u_rear",
-            "u_power", "excess", "f_drive", "f_brake", "lam", "v_ref", "heave_f", "heave_r",
+            "u_power", "excess", "f_drive", "f_brake", "f_regen", "lam", "v_ref", "heave_f", "heave_r",
             "damper_f", "damper_r", "road_f", "road_r", "limit", "lift", "oor", "alpha_f", "alpha_r",
             "steer", "usi", "excess_f", "ay", "e_y", "e_psi", "yaw_rate", "learn", "spin")}
         t = s = 0.0
@@ -559,6 +559,7 @@ class TransientSolver:
             rec["excess_f"].append(ex_filt)
             rec["f_drive"].append(g["f_drive"])
             rec["f_brake"].append(g["f_brake"])
+            rec["f_regen"].append(g["f_regen"])
             rec["lam"].append(lam)
             rec["v_ref"].append(vr)
             rec["heave_f"].append(0.5 * (dl[FL] + dl[FR]))
@@ -658,7 +659,7 @@ class TransientSolver:
         np.maximum.at(node_excess, node_idx, rec_a["learn"])
         node_v = np.interp(s_nodes, rec_a["s"], rec_a["v"])
         _, energy = powertrain_channels(car, rec_a["v"], rec_a["ax"], rec_a["f_drive"], np.diff(rec_a["t"]),
-                                        rec_a["f_brake"])
+                                        rec_a["f_brake"], rec_a["f_regen"])
         return _Run(t_hist, s_hist, rec_a, lap_time, energy, node_excess, node_v)
 
     # ------------------------------------------------------------------ helpers
@@ -744,7 +745,7 @@ class TransientSolver:
         ch["drive_force_N"] = at("f_drive")
         ch["brake_force_N"] = at("f_brake")
         pch, _ = powertrain_channels(car, v, at("ax"), ch["drive_force_N"], np.diff(np.interp(s_n, run.s, run.t)),
-                                     ch["brake_force_N"])
+                                     ch["brake_force_N"], at("f_regen"))
         ch.update(pch)
         ch["v_ref_kmh"] = at("v_ref") * 3.6
         ch["flap_position"] = at("lam")
@@ -846,7 +847,7 @@ def _flap_command(ref: LapResult, strat) -> np.ndarray:
 
 
 _G_KEYS = ("uy_f", "uy_r", "u_front", "u_rear", "u_power", "alpha_f", "alpha_r", "steer",
-           "understeer_index", "f_drive", "f_brake", "limit", "beta", "ux_f", "ux_r")
+           "understeer_index", "f_drive", "f_brake", "limit", "beta", "ux_f", "ux_r", "f_regen")
 
 
 def _feasible_prefix(feas: np.ndarray) -> int:

@@ -135,7 +135,6 @@ DEFAULTS: dict[str, Any] = {
         "capacity_kWh": None,  # nominal pack energy; null -> no energy check
         "usable_fraction": 0.95,  # usable share of the nominal energy (SOC window)
         "regen_power_kW": 0.0,  # recuperation power limit at the battery (0 = no regen)
-        "regen_axle_share": 0.35,  # share of the braking force on the driven (rear) axle
     },
     "aero": {
         "type": "constant",
@@ -205,7 +204,7 @@ KNOWN_KEYS: dict[str, set[str]] = {
     "suspension.front": _FRONT_AXLE_KEYS,
     "suspension.rear": _REAR_AXLE_KEYS,
     "brakes": {"bias_front"},
-    "battery": {"capacity_kWh", "usable_fraction", "regen_power_kW", "regen_axle_share", "series",
+    "battery": {"capacity_kWh", "usable_fraction", "regen_power_kW", "series",
                 "parallel", "soc", "soc_min", "soc_stages", "interconnect_resistance_mOhm", "max_current_A", "cell",
                 "thermal", "temperature_C"},
     "battery.cell": {"capacity_Ah", "resistance_mOhm", "max_current_A", "v_min", "ocv", "resistance_temp",
@@ -369,6 +368,8 @@ def migrate(raw: dict) -> tuple[dict, list[str]]:
       pack the pack model sets the deliverable power, so the value is dropped)
     * ``aero.strategy.closed_mode`` -> ``aero.default_mode`` (the closed / fixed mode is the default mode)
     * ``aero.components.<n>.flap_ranges`` - removed (flap ranges come from ``elements.<flap>.range``)
+    * ``battery.regen_axle_share`` - removed (regen brakes the driven axle with what the motor and the
+      battery take; the friction brakes add the rest by ``brakes.bias_front``)
     """
     raw = copy.deepcopy(raw)
     msgs: list[str] = []
@@ -385,6 +386,11 @@ def migrate(raw: dict) -> tuple[dict, list[str]]:
             msgs.append("'powertrain.ev.drivetrain_efficiency' removed: without a motor model "
                         f"'powertrain.efficiency' ({_fmt(old)}) is the drivetrain efficiency")
     bat = raw.get("battery")
+    if isinstance(bat, dict) and "regen_axle_share" in bat:
+        bat.pop("regen_axle_share")
+        if float(bat.get("regen_power_kW") or 0.0) > 0.0:
+            msgs.append("'battery.regen_axle_share' removed: regen now takes as much of the braking on the driven "
+                        "axle as the motor / battery allow, the friction brakes add the rest by brakes.bias_front")
     if isinstance(bat, dict) and "max_power_kW" in bat:
         val = bat.pop("max_power_kW")
         if val is not None:
