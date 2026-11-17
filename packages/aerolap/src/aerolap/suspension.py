@@ -1,9 +1,34 @@
-"""Linear suspension description of one axle (stiffnesses referred to the wheel centre)."""
+"""Suspension description of one axle (stiffnesses referred to the wheel centre).
+
+Linear springs / ARB / third element, plus the optional nonlinear parts: a bump stop (extra rate
+beyond a gap in bump travel), a bilinear damper with a rebound factor (transient solver), roll-centre
+migration with heave, bump steer and a tabulated camber curve.
+"""
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+
+import numpy as np
+
+
+def _camber_curve(points, axle: str):
+    if points is None:
+        return None
+    try:
+        arr = np.asarray(points, dtype=float)
+        ok = arr.ndim == 2 and arr.shape[1] == 2 and len(arr) >= 2
+    except (TypeError, ValueError):
+        ok = False
+    if not ok:
+        from .config import ConfigError
+
+        raise ConfigError(path=f"suspension.{axle}.camber_curve", value=points,
+                          condition="[[바퀴 이동 mm (범프 +), 캠버 변화 deg], ...] 2점 이상",
+                          hint="예: [[-30, 0.6], [0, 0], [30, -0.9]]")
+    arr = arr[np.argsort(arr[:, 0])]
+    return arr[:, 0] / 1000.0, np.radians(arr[:, 1])
 
 
 def series(k1: float, k2: float) -> float:
@@ -34,6 +59,14 @@ class Axle:
     motion_ratio: float = 1.0
     damper_rate: float | None = None  # N s/m at the damper (None -> damping ratio)
     damping_ratio: float = 0.65
+    bump_stop_gap: float | None = None  # m of wheel travel in bump
+    bump_stop_rate: float = 0.0  # N/m at the wheel
+    damper_high_rate: float | None = None  # N s/m at the damper above the knee
+    damper_knee: float = 0.05  # m/s at the damper
+    rebound_factor: float = 1.0
+    roll_center_gain: float = 0.0  # m of roll-centre height per m of heave (bump +)
+    bump_steer: float = 0.0  # rad of toe-in per m of bump
+    camber_curve: tuple | None = None  # (travel m, camber change rad) arrays
 
     @classmethod
     def from_config(cls, a: dict, track_mm: float, tire_rate: float, unsprung_kg: float,
@@ -56,7 +89,46 @@ class Axle:
             damper_rate=None if a.get("damper_rate_Ns_per_mm") is None
             else float(a["damper_rate_Ns_per_mm"]) * 1000.0,
             damping_ratio=float(a.get("damping_ratio", 0.65)),
+            bump_stop_gap=None if a.get("bump_stop_gap_mm") is None else float(a["bump_stop_gap_mm"]) / 1000.0,
+            bump_stop_rate=float(a.get("bump_stop_rate_N_per_mm") or 0.0) * 1000.0,
+            damper_high_rate=None if a.get("damper_high_speed_Ns_per_mm") is None
+            else float(a["damper_high_speed_Ns_per_mm"]) * 1000.0,
+            damper_knee=float(a.get("damper_knee_mm_s", 50.0)) / 1000.0,
+            rebound_factor=float(a.get("damper_rebound_factor", 1.0)),
+            roll_center_gain=float(a.get("roll_center_gain_mm_per_mm") or 0.0),
+            bump_steer=math.radians(float(a.get("bump_steer_deg_per_mm") or 0.0)) * 1000.0,
+            camber_curve=_camber_curve(a.get("camber_curve"), "front" if is_front else "rear"),
         )
+
+    @property
+    def has_bump_stop(self) -> bool:
+        return self.bump_stop_gap is not None and self.bump_stop_rate > 0.0
+
+    def corner_force(self, z):
+        """Spring + bump stop force at the wheel (N) for wheel travel ``z`` (m, bump +)."""
+        f = self.wheel_rate * z
+        if self.has_bump_stop:
+            f = f + self.bump_stop_rate * np.maximum(np.asarray(z) - self.bump_stop_gap, 0.0)
+        return f
+
+    def camber_change(self, z):
+        """Camber change (rad) for wheel travel ``z`` (m): the table if given, else the linear gain."""
+        if self.camber_curve is None:
+            return self.camber_gain * np.asarray(z)
+        tz, tc = self.camber_curve
+        return np.interp(np.asarray(z), tz, tc)
+
+    def damper_force(self, v, c_low: float) -> float:
+        """Damper force at the wheel (N) for wheel speed ``v`` (m/s, bump +); ``c_low`` is the wheel
+        damping below the knee. Bilinear above the knee, rebound scaled by ``rebound_factor``."""
+        f = c_low * v
+        if self.damper_high_rate is not None:
+            mr = self.motion_ratio
+            knee_w = self.damper_knee / mr
+            if abs(v) > knee_w:
+                c_high = self.damper_high_rate * mr * mr
+                f = math.copysign(c_low * knee_w + c_high * (abs(v) - knee_w), v)
+        return f * self.rebound_factor if v < 0.0 else f
 
     @property
     def heave_stiffness(self) -> float:

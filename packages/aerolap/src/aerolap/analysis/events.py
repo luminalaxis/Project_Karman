@@ -79,15 +79,18 @@ def motor_thermal_note(vehicle: VehicleModel, res: LapResult) -> str:
     ch = res.channels
     if m is None or "motor_torque_Nm" not in ch:
         return ""
+    n = vehicle.powertrain.n_motors
     dt = np.diff(res.t)
     tq = 0.5 * (ch["motor_torque_Nm"][1:] + ch["motor_torque_Nm"][:-1])
-    p_mech = ch["motor_torque_Nm"] * ch["motor_rpm"] * 2.0 * np.pi / 60.0
-    pm = 0.5 * (p_mech[1:] + p_mech[:-1])
     t_rms = float(np.sqrt((tq ** 2 * dt).sum() / dt.sum()))
-    p_mean = float((pm * dt).sum() / dt.sum()) / 1000.0
+    ps = res.power_stats()
+    p_mean = ps.get("motor_mean_kW", 0.0) / n  # per motor, vs its S1 rating
     flag = "OK" if t_rms <= m.cont_torque and p_mean <= m.cont_power / 1000.0 else "ABOVE continuous rating"
-    return (f"motor {m.name}: RMS torque {t_rms:.1f} Nm (S1 {m.cont_torque:.0f} Nm), mean power "
-            f"{p_mean:.1f} kW (S1 {m.cont_power / 1000.0:.0f} kW) -> {flag}")
+    each = " per motor" if n > 1 else ""
+    return (f"motor {m.name}{f' x{n}' if n > 1 else ''}: peak {ps.get('motor_peak_kW', 0.0):.1f} kW, mean "
+            f"{ps.get('motor_mean_kW', 0.0):.1f} kW (driving {ps.get('motor_mean_drive_kW', 0.0):.1f} kW); "
+            f"RMS torque {t_rms:.1f} Nm{each} (S1 {m.cont_torque:.0f} Nm), mean {p_mean:.1f} kW{each} "
+            f"(S1 {m.cont_power / 1000.0:.0f} kW) -> {flag}")
 
 
 def events_table(events: list[EventResult]) -> str:

@@ -23,6 +23,18 @@ datasheet values and a speed-dependent iron / mechanical / fixed loss
 3000 rpm / 110 Nm, 94-96 % island over 2000-4500 rpm and 60-170 Nm, 86-90 % at
 1000 rpm / 20 Nm, below 86 % at 500 rpm). Approximate - replace with a measured map if
 you have one.
+
+Options (``powertrain.ev``):
+
+* ``field_weakening_loss: true`` - above the base speed the controller drives a d-axis current to weaken
+  the magnet flux, ``I_d = I_max (1 - n_base / n)``, which adds ``3 I_d^2 R`` of copper loss (the datasheet
+  fit alone is optimistic at high speed and low torque);
+* ``winding_temp_C`` - phase resistance at that winding temperature, ``R (1 + 0.00393 (T - 20))``;
+* ``efficiency_map`` - CSV ``rpm,torque_Nm,efficiency`` (measured points, scattered): efficiency from the
+  map (linear inside, nearest point outside); losses follow as ``P (1 / eta - 1)``.
+
+``losses`` is the one loss model and ``efficiency = P / (P + losses)``, so the energy and the thermal
+models always agree.
 """
 
 from __future__ import annotations
@@ -72,6 +84,8 @@ class Motor:
     rotor_inertia: float  # kg m^2
     mass: float
     speed_loss: tuple[float, float, float]  # c0, c1, c2
+    field_weakening_loss: bool = False
+    eff_map: object = None  # (LinearND, Nearest) interpolators of a measured efficiency map
 
     @classmethod
     def from_config(cls, ev: dict) -> "Motor":
@@ -101,13 +115,18 @@ class Motor:
         i_max = min(float(i_ctrl), var["i_peak"]) if i_ctrl is not None else var["i_peak"]
         inertia = ev.get("rotor_inertia_kgm2")
         cont_t, cont_p = db["continuous"][cooling]
+        r_phase = var["r_phase"]
+        if ev.get("winding_temp_C") is not None:  # copper: +0.393 %/K from the 20 C datasheet value
+            r_phase *= 1.0 + 0.00393 * (float(ev["winding_temp_C"]) - 20.0)
+        eff_map = _efficiency_map(ev.get("efficiency_map"), ev.get("_base_dir", "."))
         return cls(
             name=f"{db['name']} {variant} {cooling}", variant=variant, cooling=cooling,
             peak_torque=db["peak_torque_Nm"], max_rpm=float(ev.get("max_rpm") or db["max_rpm"]),
             peak_power=db["peak_power_kW"] * 1000.0, kt=var["kt"], kv_peak=var["kv_peak"],
-            r_phase=var["r_phase"], v_dc=v_dc, i_max=i_max, cont_torque=cont_t, cont_power=cont_p * 1000.0,
+            r_phase=r_phase, v_dc=v_dc, i_max=i_max, cont_torque=cont_t, cont_power=cont_p * 1000.0,
             rotor_inertia=float(inertia) if inertia is not None else db["rotor_inertia_kgm2"][cooling],
             mass=db["mass_kg"][cooling], speed_loss=tuple(db["speed_loss_W"]),
+            field_weakening_loss=bool(ev.get("field_weakening_loss", False)), eff_map=eff_map,
         )
 
     @property
@@ -128,20 +147,70 @@ class Motor:
         t = np.minimum(t, self.peak_power / np.maximum(omega, 1e-9))
         return np.where(n <= self.max_rpm, t, 0.0)
 
-    def losses(self, rpm, torque):
-        """Copper + speed (iron, friction, fixed) losses at (rpm, torque), W."""
-        n = np.maximum(np.asarray(rpm, dtype=float), 0.0)
-        t = np.abs(np.asarray(torque, dtype=float))
-        c0, c1, c2 = self.speed_loss
-        return 3.0 * (t / self.kt) ** 2 * self.r_phase + c0 + c1 * n + c2 * n * n
-
-    def efficiency(self, rpm, torque):
-        """Motor efficiency at (rpm, torque >= 0); clipped to [0.5, 0.97]."""
-        n = np.maximum(np.asarray(rpm, dtype=float), 0.0)
-        t = np.abs(np.asarray(torque, dtype=float))
-        p = t * n * 2.0 * math.pi / 60.0
+    def _model_losses(self, n, t):
         c0, c1, c2 = self.speed_loss
         loss = 3.0 * (t / self.kt) ** 2 * self.r_phase + c0 + c1 * n + c2 * n * n
+        if self.field_weakening_loss:
+            i_d = self.i_max * np.clip(1.0 - self.base_rpm / np.maximum(n, 1e-9), 0.0, 1.0)
+            loss = loss + 3.0 * i_d * i_d * self.r_phase
+        return loss
+
+    def _map_eta(self, n, t):
+        lin, near = self.eff_map
+        nb, tb = np.broadcast_arrays(n, t)
+        pts = np.column_stack([nb.ravel(), tb.ravel()])
+        eta = lin(pts)
+        eta = np.where(np.isfinite(eta), eta, near(pts))
+        return np.clip(eta, 0.3, 0.995).reshape(nb.shape)
+
+    def losses(self, rpm, torque):
+        """Motor losses at (rpm, torque), W: from the measured map if given, else copper (+ field
+        weakening) + speed (iron, friction, fixed) losses."""
+        n = np.maximum(np.asarray(rpm, dtype=float), 0.0)
+        t = np.abs(np.asarray(torque, dtype=float))
+        model = self._model_losses(n, t)
+        if self.eff_map is None:
+            return model
+        p = t * n * 2.0 * math.pi / 60.0
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.where(p > 1.0, p * (1.0 / self._map_eta(n, t) - 1.0), model)
+
+    def efficiency(self, rpm, torque):
+        """Motor efficiency at (rpm, torque >= 0), ``P / (P + losses)``; the datasheet model is clipped
+        to [0.5, 0.97], a measured map to [0.3, 0.995]."""
+        n = np.maximum(np.asarray(rpm, dtype=float), 0.0)
+        t = np.abs(np.asarray(torque, dtype=float))
+        if self.eff_map is not None:
+            return np.where(t * n > 0.0, self._map_eta(n, t), 0.5)
+        p = t * n * 2.0 * math.pi / 60.0
+        loss = self._model_losses(n, t)
         with np.errstate(divide="ignore", invalid="ignore"):
             eta = np.where(p > 1.0, p / (p + loss), 0.5)
         return np.clip(eta, 0.5, 0.97)
+
+
+def _efficiency_map(path, base_dir):
+    """Interpolators of a measured map CSV ``rpm,torque_Nm,efficiency`` (efficiency as a fraction or %)."""
+    if not path:
+        return None
+    from pathlib import Path
+
+    from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
+
+    from .config import ConfigError
+
+    p = Path(path)
+    if not p.is_absolute():
+        p = Path(base_dir) / p
+    try:
+        data = np.genfromtxt(p, delimiter=",", names=True, comments="#")
+        pts = np.column_stack([data["rpm"], data["torque_Nm"]]).astype(float)
+        eta = np.asarray(data["efficiency"], dtype=float)
+    except (OSError, ValueError, KeyError) as exc:
+        raise ConfigError(path="powertrain.ev.efficiency_map", value=str(path),
+                          condition="CSV rpm,torque_Nm,efficiency", message=str(exc)) from None
+    if len(eta) < 3:
+        raise ConfigError(path="powertrain.ev.efficiency_map", value=str(path), condition="점 3개 이상")
+    if eta.max() > 1.5:  # percent
+        eta = eta / 100.0
+    return LinearNDInterpolator(pts, eta), NearestNDInterpolator(pts, eta)

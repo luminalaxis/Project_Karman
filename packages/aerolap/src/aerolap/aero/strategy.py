@@ -32,7 +32,7 @@ class StrategyConfig:
 
     @classmethod
     def from_config(cls, s: dict, aero_model) -> "StrategyConfig":
-        closed = aero_model.mode_index(s.get("closed_mode"), aero_model.default_mode)
+        closed = aero_model.default_mode
         others = [i for i in range(len(aero_model.mode_names)) if i != closed]
         open_default = others[0] if others else closed
         opened = aero_model.mode_index(s.get("open_mode"), open_default)

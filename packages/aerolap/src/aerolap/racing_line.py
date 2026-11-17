@@ -263,7 +263,8 @@ class LineResult:
         lines.append(f"  {'length weight':>13s} {'lap [s]':>9s} {'length [m]':>10s} {'max kappa':>10s} {'iter':>5s}")
         for c in self.candidates:
             mark = "  <- chosen" if c is b else ""
-            lines.append(f"  {c.weight:13.4g} {c.lap_time:9.3f} {c.length:10.1f} {c.max_kappa:10.4f} {c.iterations:5d}"
+            label = "min-time OCP" if math.isnan(c.weight) else f"{c.weight:.4g}"
+            lines.append(f"  {label:>13s} {c.lap_time:9.3f} {c.length:10.1f} {c.max_kappa:10.4f} {c.iterations:5d}"
                          + mark)
         ref_len = self.reference_lap.s[-1]
         lines += ["",
@@ -285,8 +286,9 @@ class LineResult:
         wl, wr = r.wl - a, r.wr + a
         with open(path, "w", newline="", encoding="utf-8") as fh:
             fh.write(f"# name: {name or self.lap.track_name}\n# closed: {'true' if r.closed else 'false'}\n")
-            fh.write("# cutoff_m: 3\n# source: aerolap racing line (minimum curvature + length weight "
-                     f"{self.best.weight:g}, chosen by QSS lap time)\n")
+            how = ("minimum-time optimal control" if math.isnan(self.best.weight)
+                   else f"minimum curvature + length weight {self.best.weight:g}")
+            fh.write(f"# cutoff_m: 3\n# source: aerolap racing line ({how}, chosen by QSS lap time)\n")
             w = csv.writer(fh)
             w.writerow(["x_m", "y_m"] + (["z_m"] if r.z is not None else []) + ["width_left_m", "width_right_m"])
             for i in range(r.n):

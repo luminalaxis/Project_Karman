@@ -78,7 +78,6 @@ aero:
   strategy:
     type: rule                # fixed | rule | ideal
     open_mode: drs
-    closed_mode: high_df
     open_radius_m: 60
     min_length_m: 15
     min_speed_kmh: 80         # below this the rear downforce is worth more for traction
@@ -90,7 +89,7 @@ powertrain:
   type: ev
   drive: rwd
   differential: lsd
-  efficiency: 0.92            # only used without a motor model
+  efficiency: 0.97            # drivetrain (chain / gears); the motor model adds motor + inverter losses
   ev:
     motor: emrax_228          # datasheet v1.7: 220 Nm, 6500 rpm, 124 kW peak, rotor 0.0398 kg m^2
     motor_variant: MV         # HV | MV | LV winding (sets KV, KT, peak current, resistance)
@@ -99,14 +98,11 @@ powertrain:
     controller_current_A: null   # inverter phase-current limit [A_rms]; null -> motor peak (MV: 360 A)
     n_motors: 1
     reduction_ratio: 3.6
-    drivetrain_efficiency: 0.97   # chain / gears
     inverter_efficiency: 0.97
     power_limit_kW: 80        # accumulator power limit (battery side)
 
 battery:                      # ASSUMED values - replace with your accumulator
   capacity_kWh: 7.5           # nominal pack energy (null -> no endurance energy check)
   usable_fraction: 0.95       # SOC window actually usable -> 7.1 kWh
-  max_power_kW: null          # pack discharge limit; effective limit = min(this, power_limit_kW)
   regen_power_kW: 0           # recuperation limit at the battery (0 = no regen)
-  regen_axle_share: 0.35      # share of the braking force on the driven (rear) axle
 

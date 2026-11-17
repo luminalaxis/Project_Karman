@@ -70,3 +70,42 @@ def test_lap_energy_uses_motor_efficiency(ev_cfg):
     assert np.nanmax(ch["battery_power_kW"]) <= 80.0 * 1.01
     mech = np.nansum(ch["drive_power_kW"][:-1] * np.diff(res.t)) * 1000.0
     assert res.energy_J > mech  # losses on top of the energy at the wheels
+
+
+def test_motor_peak_and_mean_power(ev_cfg):
+    from aerolap.solvers.qss import QSSSolver
+    from aerolap.track import Track
+    from aerolap.vehicle import VehicleModel
+
+    car = VehicleModel(ev_cfg)
+    res = QSSSolver().solve(car, Track.straight(200.0), start="standing")
+    ch = res.channels
+    p = ch["motor_torque_Nm"] * ch["motor_rpm"] * 2 * np.pi / 60 * car.powertrain.n_motors / 1000
+    st = res.summary()
+    assert st["motor_peak_kW"] == pytest.approx(p.max())
+    dt = np.diff(res.t)
+    assert st["motor_mean_kW"] == pytest.approx((0.5 * (p[1:] + p[:-1]) * dt).sum() / dt.sum())
+    assert st["motor_mean_kW"] <= st["motor_mean_drive_kW"] <= st["motor_peak_kW"]
+    assert st["motor_elec_peak_kW"] > st["motor_peak_kW"]  # motor losses
+
+
+def test_field_weakening_and_winding_temperature_cost_efficiency():
+    base = Motor.from_config({"motor": "emrax_228", "dc_voltage_V": 550})
+    fw = Motor.from_config({"motor": "emrax_228", "dc_voltage_V": 550, "field_weakening_loss": True})
+    hot = Motor.from_config({"motor": "emrax_228", "dc_voltage_V": 550, "winding_temp_C": 100})
+    assert float(fw.efficiency(6000, 30)) < float(base.efficiency(6000, 30))
+    assert float(fw.efficiency(2000, 100)) == pytest.approx(float(base.efficiency(2000, 100)))  # below base speed
+    assert float(hot.efficiency(3000, 110)) < float(base.efficiency(3000, 110))
+    # one loss model: efficiency = P / (P + losses)
+    p = 6000 * 30 * 2 * math.pi / 60
+    assert float(fw.efficiency(6000, 30)) == pytest.approx(p / (p + float(fw.losses(6000, 30))))
+
+
+def test_measured_efficiency_map(tmp_path):
+    f = tmp_path / "map.csv"
+    f.write_text("rpm,torque_Nm,efficiency\n0,0,80\n6500,0,85\n0,220,85\n6500,220,93\n3000,110,96\n")
+    m = Motor.from_config({"motor": "emrax_228", "efficiency_map": str(f)})
+    assert float(m.efficiency(3000, 110)) == pytest.approx(0.96)
+    p = 3000 * 110 * 2 * math.pi / 60
+    assert float(m.losses(3000, 110)) == pytest.approx(p * (1 / 0.96 - 1))
+    assert np.shape(m.efficiency(np.array([1000.0, 2000.0]), 50.0)) == (2,)

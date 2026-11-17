@@ -1,7 +1,7 @@
 # MIP 228MV FD4 - LATEST OptimumLap vehicle (data/26 track optimum lap/26262626/Project/Vehicle, mu 1.3, driveefficiency 0.6), imported with:
 #   aerolap import-vehicle data/vehicles/MIP_228MV_FD4_Diagnostic.OLVeh --full --base data/vehicles/fsk2026.yaml --motor emrax_228 --motor-variant MV --motor-cooling LC
-# With the motor model AeroLap computes the drivetrain itself (ev.drivetrain_efficiency 0.97, inverter, motor map,
-# battery); powertrain.efficiency (0.6 from OptimumLap) is only used by the OptimumLap-equivalent L0 run of the .OLVeh.
+# With the motor model AeroLap computes motor, inverter and battery losses itself; powertrain.efficiency is the
+# drivetrain only (0.97). OptimumLap's 0.6 lumps all of them and is used only when the .OLVeh itself is run.
 # Same car as fsk2026.yaml otherwise (aero block: OptimumLap constant ClA 0.997 / CdA 0.470).
 # Imported from OptimumLap vehicle 'MIP_228MV_FD4_Diagnostic' (MIP_228MV_FD4_Diagnostic.OLVeh) with 'aerolap import-vehicle'.
 # Full model: OptimumLap mass / tyres / aero + emrax_228 motor model.
@@ -96,16 +96,14 @@ powertrain:
   type: ev
   drive: rwd
   differential: lsd
-  efficiency: 0.6
+  efficiency: 0.97          # drivetrain (gears, chain); the motor model adds motor + inverter losses
   ev:
-    drivetrain_efficiency: 0.97
     inverter_efficiency: 0.97
     power_limit_kW: 80
     n_motors: 1
     motor: emrax_228
     motor_variant: MV
     motor_cooling: LC
-    dc_voltage_V: 550.0
     reduction_ratio: 4.0
 battery:
   series: 132
@@ -134,4 +132,3 @@ battery:
     - - 1.0
       - 4.18
   regen_power_kW: 0
-  regen_axle_share: 0.35

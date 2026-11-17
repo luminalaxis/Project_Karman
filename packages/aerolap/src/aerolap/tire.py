@@ -115,6 +115,9 @@ class Tire:
         """Lateral force of an axle (two tyres with peak forces ``caps``) at slip angle ``alpha``."""
         return float(caps[0] + caps[1]) * lat_shape(alpha / self.peak_slip)
 
+    def lateral_offset(self, fz: float) -> tuple[float, float]:
+        return 0.0, 0.0
+
     def describe(self) -> str:
         return (f"simple tyre: mu_x {self.mu_x:g}, mu_y {self.mu_y:g} at {self.fz_ref:g} N, load sensitivity "
                 f"{self.load_sensitivity:+g}/100 %, peak slip {math.degrees(self.peak_slip):.1f} deg")

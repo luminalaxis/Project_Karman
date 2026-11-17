@@ -132,16 +132,14 @@ powertrain:
   type: ev
   drive: rwd
   differential: lsd
-  efficiency: 0.9
+  efficiency: 0.97          # drivetrain (gears, chain); the motor model adds motor + inverter losses
   ev:
-    drivetrain_efficiency: 0.97
     inverter_efficiency: 0.97
     power_limit_kW: 80
     n_motors: 1
     motor: emrax_228
     motor_variant: MV
     motor_cooling: LC
-    dc_voltage_V: 550.0        # ignored with the pack model (bus voltage from battery: at full power)
     reduction_ratio: 4.0
 battery:
   # Cell-based pack model (aerolap/battery.py). ALL VALUES ASSUMED (21700 ~4 Ah high-power cell,
@@ -160,4 +158,3 @@ battery:
     v_min: 2.8
     ocv: [[0.0, 3.0], [0.1, 3.35], [0.2, 3.5], [0.5, 3.68], [0.8, 3.95], [1.0, 4.18]]   # [SOC, V]
   regen_power_kW: 0           # recuperation limit at the battery (0 = no regen)
-  regen_axle_share: 0.35

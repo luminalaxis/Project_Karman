@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..road import RoadProfile
+from ..tire import lat_shape as _lat_shape
 from ..vehicle import G, LIMIT_NAMES, VehicleModel
 from .base import LapResult, powertrain_channels
 from .ggv import SolverOptions
@@ -74,7 +75,36 @@ class TransientOptions:
     relaxation_length: float = 0.25  # m, tyre force follows load changes with this lag
     min_unsprung_kg: float = 3.0  # per corner, used when the vehicle has less (or none)
     tyre_damping_ratio: float = 0.05
+    wheel_dynamics: bool = False  # wheel spin states: tyre Fx from the slip ratio (lags / spins)
+    driver: str = "pid"  # pid: speed / path follower; mpc: receding-horizon optimal control (casadi)
+    mpc_horizon: float = 0.8  # s
+    mpc_period: float = 0.05  # s, re-plan interval (the command is held in between)
     qss: SolverOptions = field(default_factory=SolverOptions)
+
+
+class TyreHeat:
+    """Lumped temperature of the tyres of each axle (``tires.thermal``): slip power heats them, the air
+    cools them; the grip follows ``tires.grip_window``."""
+
+    def __init__(self, car: VehicleModel, th: dict):
+        self.car = car
+        amb = th.get("ambient_C")
+        self.ambient = float(car.cfg["environment"]["temperature_C"] if amb is None else amb)
+        self.c = 2.0 * float(th.get("heat_capacity_J_per_K", 2500.0))  # tread layer, two tyres per axle
+        self.h0 = 2.0 * float(th.get("cooling_W_per_K", 15.0))
+        self.h1 = 2.0 * float(th.get("cooling_W_per_K_per_mps", 2.5))
+        self.share = float(th.get("heat_share", 0.5))  # share of the slip power that heats the tread
+        start = th.get("start_C")
+        self.temp = [float(self.ambient if start is None else start)] * 2
+
+    def step(self, v: float, slip_power: tuple[float, float], dt: float) -> None:
+        h = self.h0 + self.h1 * max(v, 0.0)
+        for i in range(2):
+            self.temp[i] += (self.share * slip_power[i] - h * (self.temp[i] - self.ambient)) / self.c * dt
+
+    def grip(self) -> np.ndarray:
+        f, r = (float(x) for x in self.car.grip_temp_factor(self.temp))
+        return np.array([f, f, r, r])
 
 
 class RideModel:
@@ -97,6 +127,10 @@ class RideModel:
         self.y = [-0.5 * fr.track, 0.5 * fr.track, -0.5 * rr.track, 0.5 * rr.track]
         self.kw = [fr.wheel_rate, fr.wheel_rate, rr.wheel_rate, rr.wheel_rate]
         self.cw = [0.5 * car.C_heave_f] * 2 + [0.5 * car.C_heave_r] * 2
+        self.axles = [fr, fr, rr, rr]
+        # nonlinear corner springs / dampers only where configured (the linear path stays fast)
+        self.nl_spring = [a.has_bump_stop for a in self.axles]
+        self.nl_damper = [a.damper_high_rate is not None or a.rebound_factor != 1.0 for a in self.axles]
         self.k3 = [fr.heave_rate, rr.heave_rate]
         self.karb = [fr.arb_rate / fr.track ** 2, rr.arb_rate / rr.track ** 2]
         mu_f = max(0.5 * car.m_uf, min_unsprung_kg)
@@ -117,7 +151,9 @@ class RideModel:
         dd = [hd + x[i] * thd + y[i] * phd for i in range(4)]
         dl = [d[i] - w[i] for i in range(4)]
         ddl = [dd[i] - wd[i] for i in range(4)]
-        f = [self.kw[i] * dl[i] + self.cw[i] * ddl[i] for i in range(4)]
+        f = [(self.axles[i].corner_force(dl[i]) if self.nl_spring[i] else self.kw[i] * dl[i])
+             + (self.axles[i].damper_force(ddl[i], self.cw[i]) if self.nl_damper[i] else self.cw[i] * ddl[i])
+             for i in range(4)]
         for a, (i, j) in enumerate(((FL, FR), (RL, RR))):
             third = 0.25 * self.k3[a] * (dl[i] + dl[j])
             arb = self.karb[a] * (dl[j] - dl[i])
@@ -132,11 +168,22 @@ class RideModel:
         c = self.car
         f, t, _, _ = self._forces(h, hd, th, thd, ph, phd, w, wd, r, rd)
         sf = sum(f)
-        hdd = (el_f + el_r - sf) / c.m_s
-        thdd = (c.a_s * el_f - c.b_s * el_r - sum(f[i] * self.x[i] for i in range(4))) / c.I_pitch
+        pk_f = pk_r = 0.0
+        if c.plank_rate is not None:  # floor contact pushes the body up (h is down +)
+            pk_f, pk_r = self.plank(h, th, ph, r)
+        hdd = (el_f + el_r - sf - pk_f - pk_r) / c.m_s
+        thdd = (c.a_s * (el_f - pk_f) - c.b_s * (el_r - pk_r) - sum(f[i] * self.x[i] for i in range(4))) / c.I_pitch
         phdd = (m_roll + self.k_grav * ph - sum(f[i] * self.y[i] for i in range(4))) / c.I_roll
         wdd = [(f[i] + geo[i] - t[i]) / self.mu[i] for i in range(4)]
         return hdd, thdd, phdd, wdd
+
+    def plank(self, h, th, ph, r) -> tuple[float, float]:
+        """Floor contact force at the front / rear axle (N) for a body position and road height."""
+        c = self.car
+        d = [h + self.x[i] * th + self.y[i] * ph for i in range(4)]
+        rh_f = c.front.static_ride_height - 0.5 * (d[FL] + d[FR] + r[FL] + r[FR])
+        rh_r = c.rear.static_ride_height - 0.5 * (d[RL] + d[RR] + r[RL] + r[RR])
+        return float(c.plank_force(rh_f, ph)), float(c.plank_force(rh_r, ph))
 
     # ---------------------------------------------------------------- integration
     def step(self, loads, road_fn, t0: float, dt: float, n_sub: int) -> None:
@@ -157,7 +204,7 @@ class RideModel:
                 self.w[i] += self.wd[i] * h_
 
     def set_equilibrium(self, loads, r) -> None:
-        """Static equilibrium for constant loads and road (the model is linear without wheel lift)."""
+        """Static equilibrium for constant loads and road (Newton; one step when the model is linear)."""
         zero4 = [0.0] * 4
 
         def resid(xv):
@@ -165,15 +212,20 @@ class RideModel:
             hdd, thdd, phdd, wdd = self._accel(st, loads, r, zero4)
             return np.array([hdd, thdd, phdd] + wdd)
 
-        x0 = np.zeros(7)
-        r0 = resid(x0)
-        jac = np.empty((7, 7))
+        xs = np.zeros(7)
         eps = 1e-4
-        for j in range(7):
-            xp = x0.copy()
-            xp[j] = eps
-            jac[:, j] = (resid(xp) - r0) / eps
-        xs = np.linalg.solve(jac, -r0)
+        nonlinear = any(self.nl_spring) or self.car.plank_rate is not None
+        for _ in range(30 if nonlinear else 1):
+            r0 = resid(xs)
+            jac = np.empty((7, 7))
+            for j in range(7):
+                xp = xs.copy()
+                xp[j] += eps
+                jac[:, j] = (resid(xp) - r0) / eps
+            dx = np.linalg.solve(jac, -r0)
+            xs = xs + dx
+            if np.max(np.abs(dx)) < 1e-10:
+                break
         self.h, self.th, self.ph = float(xs[0]), float(xs[1]), float(xs[2])
         self.w = [float(v) for v in xs[3:7]]
         self.hd = self.thd = self.phd = 0.0
@@ -316,6 +368,13 @@ class TransientSolver:
         grade = trk.interval_grade()
         g_list = [0.0] * len(a_path) if grade is None else (G * grade).tolist()
         a_int = [a + gg for a, gg in zip(a_path, g_list)]
+        # banked / undulating road: per interval sin / cos of the bank and vertical curvature
+        road3d = trk.is_3d
+        if road3d:
+            sb_n, cb_n, kv_n = trk.gravity_terms()
+            sb_l = (0.5 * (sb_n[1:] + sb_n[:-1])).tolist()
+            cb_l = (0.5 * (cb_n[1:] + cb_n[:-1])).tolist()
+            kv_l = (0.5 * (kv_n[1:] + kv_n[:-1])).tolist()
         v2_list = (v_ref ** 2).tolist()
         open_ref = _flap_command(ref, strat) if active else np.zeros(len(ref.s))
         crr = car.tire.rolling_resistance
@@ -368,13 +427,38 @@ class TransientSolver:
         e_y = e_psi = 0.0
         ay_prev = v * v * k0
         fyf = fyr = 0.0
+        mpc = mpc_cmd = None
+        t_mpc = 0.0
+        if o.driver == "mpc":
+            if not lat_on:
+                raise ValueError("driver 'mpc' needs the lateral dynamics (lateral_dof)")
+            from ..ocp import MPCDriver
+
+            mpc = MPCDriver(car, s_nodes, ref.v, trk.kappa, horizon=o.mpc_horizon)
+        tau_aero = float(car.cfg["aero"].get("unsteady_tau_s") or 0.0)
+        hyst = float(car.cfg["aero"].get("hysteresis_mm") or 0.0) / 1000.0
+        aero_lag = None
+        rh_prev = (car.front.static_ride_height, car.rear.static_ride_height)
+        tyre_th = car.cfg["tires"].get("thermal")
+        heat = TyreHeat(car, tyre_th) if tyre_th else None
+        grip0 = car.tyre_grip
+        # wheel spin states (axle mean): angular speed and inertia; slip ratio of peak Fx
+        wheels = o.wheel_dynamics
+        r_w = tire.radius
+        i_wheel = 2.0 * float(car.cfg["tires"].get("wheel_inertia_kgm2", 0.3))
+        pt = car.powertrain
+        i_ax = [i_wheel + (pt.m_rot * r_w * r_w if pt.drive == "awd" else 0.0),
+                i_wheel + pt.m_rot * r_w * r_w]
+        omega = [v / r_w, v / r_w]
+        kp_simple = float(car.cfg["tires"].get("peak_slip_ratio", 0.1))
 
         rec: dict[str, list] = {k: [] for k in (
             "t", "s", "v", "ax", "kappa", "rh_f", "rh_r", "roll", "yaw", "pitch", "clearance", "cla_f",
             "cla_r", "cda", "fl", "fr", "rl", "rr", "cfl", "cfr", "crl", "crr", "u_front", "u_rear",
-            "u_power", "excess", "f_drive", "f_brake", "lam", "v_ref", "heave_f", "heave_r",
+            "u_power", "excess", "f_drive", "f_brake", "f_regen", "lam", "v_ref", "heave_f", "heave_r",
             "damper_f", "damper_r", "road_f", "road_r", "limit", "lift", "oor", "alpha_f", "alpha_r",
-            "steer", "usi", "excess_f", "ay", "e_y", "e_psi", "yaw_rate", "learn", "spin")}
+            "steer", "usi", "excess_f", "ay", "e_y", "e_psi", "yaw_rate", "learn", "spin", "slip_f", "slip_r",
+            "t_tyre_f", "t_tyre_r")}
         t = s = 0.0
         idx = 0
         max_steps = int(20.0 * max(ref.lap_time, 1.0) / dt) + 1000
@@ -422,12 +506,31 @@ class TransientSolver:
             roll_out = phi * sgn  # roll towards the outside of the turn
             oi = (FR, FL, RR, RL) if sgn > 0 else (FL, FR, RL, RR)  # vehicle -> (FO, FI, RO, RI)
             fz_oi = np.array([fz_eff[i] for i in oi])[:, None]
+            if heat is not None:
+                car.tyre_grip = heat.grip()
             cam_oi, inc_oi = car.corner_camber(np.array([dl[i] for i in oi])[:, None], roll_out)
 
-            # aero at the current (dynamic) attitude and flap position
-            cla_f, cla_r, cda, oor = self._aero(car, strat, lam, rh_f, rh_r, phi, beta)
+            # aero at the current (dynamic) attitude and flap position; ground-effect hysteresis reads the
+            # map lower while the floor rises, unsteady lag delays the coefficients
+            if hyst > 0.0:
+                rh_rd = (rh_f - rh_prev[0]) / dt, (rh_r - rh_prev[1]) / dt
+                rh_prev = (rh_f, rh_r)
+                rh_af = rh_f - 0.5 * hyst * math.copysign(1.0, rh_rd[0]) if abs(rh_rd[0]) > 1e-4 else rh_f
+                rh_ar = rh_r - 0.5 * hyst * math.copysign(1.0, rh_rd[1]) if abs(rh_rd[1]) > 1e-4 else rh_r
+            else:
+                rh_af, rh_ar = rh_f, rh_r
+            # signed map: vehicle-frame roll (right side down +) / yaw (left +); else magnitudes
+            cla_f, cla_r, cda, oor = self._aero(car, strat, lam, rh_af, rh_ar, phi, beta, v)
+            if tau_aero > 0.0:
+                if aero_lag is None:
+                    aero_lag = [cla_f, cla_r, cda]
+                k_a = min(1.0, dt / tau_aero)
+                aero_lag = [a + k_a * (b - a) for a, b in zip(aero_lag, (cla_f, cla_r, cda))]
+                cla_f, cla_r, cda = aero_lag
             q = 0.5 * car.rho * v * v
             df_f, df_r, drag = q * cla_f, q * cla_r, q * cda
+            if car.plank_rate is not None:  # plank sliding on the road
+                drag += car.plank_mu * sum(ride.plank(ride.h, ride.th, ride.ph, r_now))
             ax_coast = -(drag + crr * sum(fz_v)) / car.m
 
             # lateral tyre forces from the slip angles, or the kinematic demand of the line.
@@ -441,6 +544,8 @@ class TransientSolver:
                     _, fyc = car.tire.capacity(fz_oi[:, 0], inc_oi[:, 0], cam_oi[:, 0])
                 else:
                     _, fyc = car.tire.capacity(fz_oi[:, 0])
+                if heat is not None:
+                    fyc = fyc * car.tyre_grip
                 cap_f, cap_r = float(fyc[0] + fyc[1]), float(fyc[2] + fyc[3])
                 fz_t = fz_oi[:, 0]
                 if mf_tyre:  # load-dependent slip curve and peak slip of each axle
@@ -449,15 +554,39 @@ class TransientSolver:
                 else:
                     pk_f = pk_r = alpha_pk
                 vx = max(v, 0.5)
-                alpha_f = delta - (vy + car.a * yaw_rate) / vx
-                alpha_r = -(vy - car.b * yaw_rate) / vx
-                fyf = tire.axle_lateral_force(alpha_f, fyc[0:2], fz_t[0:2])
-                fyr = tire.axle_lateral_force(alpha_r, fyc[2:4], fz_t[2:4])
-                ay_act = (fyf + fyr) / car.m  # small steer angles, as in the QSS yaw balance
+                # bump steer (vehicle frame, left +): the loaded right wheel toes in -> steers left
+                rs_f = 0.5 * car.front.bump_steer * (dl[FR] - dl[FL])
+                rs_r = 0.5 * car.rear.bump_steer * (dl[RR] - dl[RL])
+                alpha_f = delta + rs_f - (vy + car.a * yaw_rate) / vx
+                alpha_r = rs_r - (vy - car.b * yaw_rate) / vx
+                # conicity / ply steer (MF PHY / PVY): the same on every wheel, vehicle frame
+                shy_f, svy_f = tire.lateral_offset(0.5 * (fz_t[0] + fz_t[1]))
+                shy_r, svy_r = tire.lateral_offset(0.5 * (fz_t[2] + fz_t[3]))
+                # caps are ordered outside / inside of the turn; the force is odd in alpha (vehicle frame)
+                fyf = tire.axle_lateral_force(alpha_f + shy_f, fyc[0:2], fz_t[0:2]) + 2.0 * svy_f
+                fyr = tire.axle_lateral_force(alpha_r + shy_r, fyc[2:4], fz_t[2:4]) + 2.0 * svy_r
+                # aero side force (vehicle frame) opposes the lateral velocity; its yaw moment about the CG
+                fs_v = -0.5 * car.rho * v * v * car.cy_area * beta if car.cy_area else 0.0
+                ay_act = (fyf + fyr + fs_v) / car.m  # small steer angles, as in the QSS yaw balance
                 fy_dem = (abs(fyf), abs(fyr))
             else:
                 ay_act = v * v * kap
+            g_bank = 0.0
+            if road3d:  # the bank carries part of the lateral load; normal gravity scales the loads
+                g_bank = G * sb_l[idx]
+                lam_g = cb_l[idx] + v * v * (kap * sb_l[idx] + kv_l[idx]) / G
+                if not dyn:
+                    ay_act = v * v * kap * cb_l[idx] - g_bank
+                df_f += (lam_g - 1.0) * car.m * G * car.b / car.L  # extra normal load like downforce at the CG
+                df_r += (lam_g - 1.0) * car.m * G * car.a / car.L
             ay = abs(ay_act)
+            if mpc is not None and dyn and t >= t_mpc:  # re-plan acceleration and steering
+                t_mpc = t + o.mpc_period
+                a_max = max(float(np.ravel(car.powertrain.max_force(v)[0])[0]) / car.m + ax_coast, 0.1)
+                mpc_cmd = mpc.command((e_y, e_psi, v, vy, yaw_rate, s),
+                                      (cap_f, cap_r, cap_f + cap_r, a_max, 0.5 * (pk_f + pk_r)))
+            elif not dyn:
+                mpc_cmd = None
 
             # driver command: jerk-limited, then limited by tyres / powertrain at the current loads
             # releasing (towards zero) is faster than applying
@@ -468,6 +597,8 @@ class TransientSolver:
             lo_j = ax_prev - (rel_dt if ax_prev > 0.0 else jerk_dt)
             hi_j = ax_prev + (rel_dt if ax_prev < 0.0 else jerk_dt)
             ax_cmd = min(max(ar + o.kp * (vr - v), lo_j), hi_j)
+            if mpc_cmd is not None:  # optimal-control driver: its acceleration (+ slope), jerk limited
+                ax_cmd = min(max(mpc_cmd[0] + g_slope, lo_j), hi_j)
             if shift_left > 0.0:
                 ax_cmd = min(ax_cmd, max(ax_coast, lo_j))
             if dyn and abs(alpha_r) > pk_r:  # rear sliding: no throttle
@@ -532,6 +663,7 @@ class TransientSolver:
             rec["excess_f"].append(ex_filt)
             rec["f_drive"].append(g["f_drive"])
             rec["f_brake"].append(g["f_brake"])
+            rec["f_regen"].append(g["f_regen"])
             rec["lam"].append(lam)
             rec["v_ref"].append(vr)
             rec["heave_f"].append(0.5 * (dl[FL] + dl[FR]))
@@ -544,20 +676,57 @@ class TransientSolver:
             rec["lift"].append(lift)
             rec["oor"].append(bool(oor))
 
+            # wheel dynamics: the commanded axle forces are wheel torques; the tyres give Fx(kappa)
+            slip_x = (0.0, 0.0)
+            ax_dyn = ax
+            if wheels:
+                fx_act = [0.0, 0.0]
+                kx = []
+                for a_i, (cmd, cap, fza, fzb) in enumerate(((g["fx_f"], g["cx_f"], fz_oi[0, 0], fz_oi[1, 0]),
+                                                            (g["fx_r"], g["cx_r"], fz_oi[2, 0], fz_oi[3, 0]))):
+                    kpk = (float(tire.peak_slip_ratio_at(0.5 * (fza + fzb))) if mf_tyre else kp_simple)
+                    cap = max(cap, 1.0)
+                    vref = max(v, 1.0)
+                    h_w = dt / n_sub
+                    w = omega[a_i]
+                    stiff = 2.0 * cap / kpk * r_w * r_w / (i_ax[a_i] * vref)  # implicit damping of the slip
+                    for _ in range(n_sub):
+                        kap_x = (w * r_w - v) / vref
+                        f_t = cap * _lat_shape(kap_x / kpk)
+                        w = w + h_w * (cmd * r_w - f_t * r_w) / i_ax[a_i] / (1.0 + h_w * stiff)
+                        w = max(w, 0.0)
+                    omega[a_i] = w
+                    kap_x = (w * r_w - v) / vref
+                    fx_act[a_i] = cap * _lat_shape(kap_x / kpk)
+                    kx.append(kap_x)
+                slip_x = (kx[0], kx[1])
+                ax_dyn = ax + (fx_act[0] + fx_act[1] - g["fx_f"] - g["fx_r"]) / car.m
+            if heat is not None:  # slip power: lateral (|Fy| v |alpha|) + longitudinal (|Fx| v kappa)
+                if dyn:
+                    p_lat = (abs(fyf) * v * abs(alpha_f), abs(fyr) * v * abs(alpha_r))
+                else:
+                    p_lat = (car.m * ay * car.b / car.L * v * g["alpha_f"], car.m * ay * car.a / car.L * v * g["alpha_r"])
+                kx_est = slip_x if wheels else (kp_simple * g["ux_f"], kp_simple * g["ux_r"])
+                p_lon = (abs(g["fx_f"]) * v * abs(kx_est[0]), abs(g["fx_r"]) * v * abs(kx_est[1]))
+                heat.step(v, (p_lat[0] + p_lon[0], p_lat[1] + p_lon[1]), dt)
+
             # integrate: loads for the chosen acceleration drive the ride model
-            comp = car.load_components(ax, ay, df_f, df_r, drag, abs(phi))
+            comp = car.load_components(ax, ay, df_f, df_r, drag, abs(phi), 0.5 * (dl[FL] + dl[FR]),
+                                       0.5 * (dl[RL] + dl[RR]))
             loads = _ride_loads({k: float(val) for k, val in comp.items()}, df_f, df_r, sgn)
             s0, v0 = s, v
             ride.step(loads, lambda tau: road_at(s0 + v0 * tau, v0), 0.0, dt, n_sub)
             spin = 0.0
             if dyn:
                 # lateral / yaw dynamics and the motion relative to the line (Frenet frame)
-                vy += (ay_act - vx * yaw_rate) * dt
-                yaw_rate += (car.a * fyf - car.b * fyr) / car.I_yaw * dt
+                vy += (ay_act + g_bank - vx * yaw_rate) * dt
+                # drive yaw moment (LSD / torque vectoring) acts into the turn the car is making
+                mz_v = g["mz_drive"] * sgn + fs_v * car.side_lever
+                yaw_rate += (car.a * fyf - car.b * fyr + mz_v) / car.I_yaw * dt
                 s_dot = (vx * math.cos(e_psi) - vy * math.sin(e_psi)) / max(1.0 - kap * e_y, 0.2)
                 e_y += (vx * math.sin(e_psi) + vy * math.cos(e_psi)) * dt
                 e_psi += (yaw_rate - kap * s_dot) * dt
-                v_new = max(v + (ax - g_slope + vy * yaw_rate) * dt, 0.0)
+                v_new = max(v + (ax_dyn - g_slope + vy * yaw_rate) * dt, 0.0)
                 slip = math.atan2(vy, vx)
                 if abs(slip) > spin_rad:  # spun: lose speed, gather it up again on the line
                     spin = 1.0
@@ -582,6 +751,8 @@ class TransientSolver:
                 e_p = e_y + l_p * math.sin(e_psi + slip)
                 d_cmd = (car.L * k_ff + math.copysign(d_ss, k_ff) - 2.0 * car.L * e_p / l_p ** 2
                          - o.yaw_rate_gain * (yaw_rate - v * k_ff))  # counter-steer a yaw-rate excess
+                if mpc_cmd is not None:
+                    d_cmd = mpc_cmd[1]
                 # no more lock than the front tyres can use: front slip at most just past the peak
                 d_mid = (vy + car.a * yaw_rate) / vx
                 d_cmd = min(max(d_cmd, d_mid - 1.05 * pk_f), d_mid + 1.05 * pk_f)
@@ -589,7 +760,7 @@ class TransientSolver:
                 delta += (d_cmd - delta) * min(1.0, dt / o.steer_lag) if o.steer_lag > 0 else d_cmd - delta
                 s += s_dot * dt
             else:
-                v_new = max(v + (ax - g_slope + ax_scrub) * dt, 0.0)
+                v_new = max(v + (ax_dyn - g_slope + ax_scrub) * dt, 0.0)
                 if roll_yaw and o.yaw_lag > 0:
                     beta += dt * (g["beta"] * sgn - beta) / o.yaw_lag
                 elif roll_yaw:
@@ -603,6 +774,10 @@ class TransientSolver:
             path_ex = 0.5 * min(max(abs(e_y) - o.max_path_error, 0.0) / o.max_path_error, 1.0)
             slide_ex = 0.5 * min(max(abs(beta) - slide_warn, 0.0) / (spin_rad - slide_warn), 1.0)
             rec["spin"].append(spin)
+            rec["slip_f"].append(slip_x[0])
+            rec["slip_r"].append(slip_x[1])
+            rec["t_tyre_f"].append(heat.temp[0] if heat is not None else math.nan)
+            rec["t_tyre_r"].append(heat.temp[1] if heat is not None else math.nan)
             rec["learn"].append(max(ex_filt, path_ex, slide_ex, 0.5 * spin))
             if lam_cmd > lam:
                 lam = min(lam_cmd, lam + dt * rate_open)
@@ -618,7 +793,9 @@ class TransientSolver:
                 gear = g_new
             v = v_new
         else:
+            car.tyre_grip = grip0
             raise RuntimeError("transient lap did not finish (driver stalled?)")
+        car.tyre_grip = grip0
 
         rec_a = {k: np.asarray(val) for k, val in rec.items()}
         # close the lap: one final sample at s >= length
@@ -630,19 +807,19 @@ class TransientSolver:
         np.maximum.at(node_excess, node_idx, rec_a["learn"])
         node_v = np.interp(s_nodes, rec_a["s"], rec_a["v"])
         _, energy = powertrain_channels(car, rec_a["v"], rec_a["ax"], rec_a["f_drive"], np.diff(rec_a["t"]),
-                                        rec_a["f_brake"])
+                                        rec_a["f_brake"], rec_a["f_regen"])
         return _Run(t_hist, s_hist, rec_a, lap_time, energy, node_excess, node_v)
 
     # ------------------------------------------------------------------ helpers
     @staticmethod
-    def _aero(car: VehicleModel, strat, lam, rh_f, rh_r, roll, yaw):
+    def _aero(car: VehicleModel, strat, lam, rh_f, rh_r, roll, yaw, speed=None):
         if lam <= 0.0 or strat.open_mode == strat.closed_mode:
-            c = car.aero_coefficients(strat.closed_mode, rh_f, rh_r, roll, yaw)
+            c = car.aero_coefficients(strat.closed_mode, rh_f, rh_r, roll, yaw, speed)
             return float(c[0]), float(c[1]), float(c[2]), bool(c[3])
-        o = car.aero_coefficients(strat.open_mode, rh_f, rh_r, roll, yaw)
+        o = car.aero_coefficients(strat.open_mode, rh_f, rh_r, roll, yaw, speed)
         if lam >= 1.0:
             return float(o[0]), float(o[1]), float(o[2]), bool(o[3])
-        c = car.aero_coefficients(strat.closed_mode, rh_f, rh_r, roll, yaw)
+        c = car.aero_coefficients(strat.closed_mode, rh_f, rh_r, roll, yaw, speed)
         mix = [(1.0 - lam) * float(a) + lam * float(b) for a, b in zip(c[:3], o[:3])]
         return mix[0], mix[1], mix[2], bool(c[3]) or bool(o[3])
 
@@ -716,7 +893,7 @@ class TransientSolver:
         ch["drive_force_N"] = at("f_drive")
         ch["brake_force_N"] = at("f_brake")
         pch, _ = powertrain_channels(car, v, at("ax"), ch["drive_force_N"], np.diff(np.interp(s_n, run.s, run.t)),
-                                     ch["brake_force_N"])
+                                     ch["brake_force_N"], at("f_regen"))
         ch.update(pch)
         ch["v_ref_kmh"] = at("v_ref") * 3.6
         ch["flap_position"] = at("lam")
@@ -730,6 +907,12 @@ class TransientSolver:
         ch["path_error_m"] = at("e_y")
         ch["heading_error_deg"] = np.degrees(at("e_psi"))
         ch["yaw_rate_dps"] = np.degrees(at("yaw_rate"))
+        if self.opts.wheel_dynamics:
+            ch["slip_ratio_front"] = at("slip_f")
+            ch["slip_ratio_rear"] = at("slip_r")
+        if np.any(np.isfinite(r["t_tyre_f"])):
+            ch["tyre_temp_front_C"] = at("t_tyre_f")
+            ch["tyre_temp_rear_C"] = at("t_tyre_r")
         node_spin = np.zeros(len(s_n), dtype=bool)
         np.logical_or.at(node_spin, np.clip(np.searchsorted(s_n, s_h, side="right") - 1, 0, len(s_n) - 1),
                          r["spin"] > 0.5)
@@ -818,7 +1001,8 @@ def _flap_command(ref: LapResult, strat) -> np.ndarray:
 
 
 _G_KEYS = ("uy_f", "uy_r", "u_front", "u_rear", "u_power", "alpha_f", "alpha_r", "steer",
-           "understeer_index", "f_drive", "f_brake", "limit", "beta", "ux_f", "ux_r")
+           "understeer_index", "f_drive", "f_brake", "limit", "beta", "ux_f", "ux_r", "f_regen", "mz_drive",
+           "fx_f", "fx_r", "cx_f", "cx_r")
 
 
 def _feasible_prefix(feas: np.ndarray) -> int:

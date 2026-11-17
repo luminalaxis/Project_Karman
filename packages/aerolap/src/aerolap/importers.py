@@ -69,6 +69,7 @@ class AcSpline:
     length: np.ndarray  # cumulative distance stored in the file, m
     side_left: np.ndarray | None = None  # distance to the track edges, m
     side_right: np.ndarray | None = None
+    camber: np.ndarray | None = None  # rad, cross slope of the road (Assetto Corsa extra data)
     lap_time_ms: int = 0
 
     @property
@@ -102,6 +103,11 @@ def read_ac_ai(path: str | Path) -> AcSpline:
             left, right = ex["side_left"].astype(float), ex["side_right"].astype(float)
             if np.all(np.isfinite(left)) and np.all(np.isfinite(right)) and 0 < np.median(left + right) < 100:
                 out.side_left, out.side_right = left, right
+            cam = ex["camber"].astype(float)
+            # ponytail: AC 'camber' read as the bank angle in rad (sign assumed + = rises to the right);
+            # check against a known banked corner before trusting it
+            if np.all(np.isfinite(cam)) and np.max(np.abs(cam)) < 0.5:
+                out.camber = cam
     return out
 
 
@@ -109,11 +115,15 @@ def track_from_ac(path: str | Path, name: str | None = None, closed: bool | None
                   cutoff_m: float = 10.0, reverse: bool = False) -> Track:
     """Track from an Assetto Corsa AI spline (``cutoff_m``: smoothing wavelength, see ``Track.from_xy``)."""
     sp = read_ac_ai(path)
-    x, y = sp.x, sp.y
+    x, y, z = sp.x, sp.y, sp.elevation
+    left, right, bank = sp.side_left, sp.side_right, sp.camber
     if reverse:
-        x, y = x[::-1], y[::-1]
+        x, y, z = x[::-1], y[::-1], z[::-1]
+        left, right = (None, None) if left is None else (right[::-1], left[::-1])
+        bank = None if bank is None else -bank[::-1]
     return Track.from_xy(x, y, name=name or Path(path).parent.parent.name or Path(path).stem,
-                         closed=closed, ds=ds, cutoff_m=cutoff_m)
+                         closed=closed, ds=ds, cutoff_m=cutoff_m, z=z, width_left=left, width_right=right,
+                         bank=bank)
 
 
 def write_xy_csv(sp: AcSpline, path: str | Path, name: str, closed: bool, cutoff_m: float) -> Path:
@@ -481,8 +491,12 @@ def _vehicle_cfg_all(ol: OlVehicle, base_raw: dict, drive: str, full: bool,
                      "shift_time_s": 0.0}
     elif full and motor:
         base_ev = (base_raw.get("powertrain") or {}).get("ev", {})
-        ev = {k: base_ev[k] for k in ("drivetrain_efficiency", "inverter_efficiency", "power_limit_kW",
-                                      "n_motors") if k in base_ev}
+        ev = {k: base_ev[k] for k in ("inverter_efficiency", "power_limit_kW", "n_motors") if k in base_ev}
+        # the file's drive efficiency lumps motor + inverter + drivetrain; the motor model adds its own
+        # losses, so the drivetrain efficiency comes from the base car (or the motor-model default)
+        base_pt = base_raw.get("powertrain") or {}
+        pt["efficiency"] = base_ev.get("drivetrain_efficiency", base_pt.get("efficiency") if base_ev.get("motor")
+                                       else None) or 0.97
         ev.update(motor)
         ev["reduction_ratio"] = final * gears[0]
         pt["ev"] = ev
