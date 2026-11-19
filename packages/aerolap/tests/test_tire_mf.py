@@ -160,6 +160,8 @@ def test_combined_exponent_shapes_the_envelope(simple_cfg):
 
 def test_transient_lateral_dynamics_with_the_mf_tyre():
     cfg = load_vehicle_config(DATA / "vehicles" / "fsk2026_mf.yaml", warn=False)
+    # a balanced roll-stiffness split: the solver is under test here, not the setup (a stiff rear bar spins)
+    cfg = with_overrides(cfg, {"suspension.front.arb_rate_Nm_per_deg": 250, "suspension.rear.arb_rate_Nm_per_deg": 150})
     car = VehicleModel(cfg)
     solver = TransientSolver(TransientOptions(iterations=1, qss=SolverOptions.coarse()))
     res = solver.solve(car, Track.circle(9.125, name="skidpad"), start="flying")
@@ -186,3 +188,10 @@ def test_tire_cli(tmp_path):
     assert cli_main(["tire", str(TIR), "--mu-x", "1.5", "--mu-y", "1.55", "--out", str(tmp_path)]) == 0
     assert (tmp_path / "tire.png").exists()
     assert "Magic Formula" in (tmp_path / "tire.txt").read_text(encoding="utf-8")
+
+
+def test_mf_vehicle_switched_back_to_the_simple_tyre():
+    """fsk2026_mf.yaml leaves the simple-tyre keys null; dropping the .tir must still give a simple tyre."""
+    cfg = load_vehicle_config(DATA / "vehicles" / "fsk2026_mf.yaml", warn=False)
+    car = VehicleModel(with_overrides(cfg, {"tires.mf_file": None}))
+    assert car.tire.min_mu_factor > 0.0 and car.tire.peak_slip > 0.0

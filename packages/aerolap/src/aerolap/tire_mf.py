@@ -31,8 +31,8 @@ What the 4-wheel model takes from the Magic Formula (ISO-W / TYDEX sign conventi
 
 The peak forces and slip curves are symmetric left / right (the quasi-steady-state model is); the
 conicity / ply-steer offsets ``PHY1-2`` (slip-angle shift) and ``PVY1-2`` (lateral force at zero slip) are
-applied by the transient solver only (:meth:`MagicFormulaTire.lateral_offset`, all wheels the same way:
-the car pulls to one side). ``PHX*``, ``PVX*``, ``PEY3-4``, ``PEX4`` are left out.
+applied by the transient solver only, with ``tires.mf_offsets: true`` (:meth:`MagicFormulaTire.lateral_offset`,
+all wheels the same way: the car pulls to one side). ``PHX*``, ``PVX*``, ``PEY3-4``, ``PEX4`` are left out.
 """
 
 from __future__ import annotations

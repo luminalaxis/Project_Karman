@@ -119,5 +119,4 @@ def test_exchange_signs():
                      "level": "L4"}, ".", None, SolverOptions.coarse())
     ex = aero_exchange(cfg, obj)
     assert ex.get("ClA").delta < 0 < ex.get("CdA").delta and ex.get("mass").delta > 0
-    assert {"front", "front.flap1", "front.flap2", "side", "side.flap1", "sidepod", "rear"} <= {i.label for i in ex.items}
-    assert ex.get("sidepod").delta > 0  # a bigger radiator exit: more cooling drag
+    assert {"front", "front.flap1", "front.flap2", "side", "side.flap1", "rear"} <= {i.label for i in ex.items}

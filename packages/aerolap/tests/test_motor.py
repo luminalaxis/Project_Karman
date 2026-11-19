@@ -109,3 +109,31 @@ def test_measured_efficiency_map(tmp_path):
     p = 3000 * 110 * 2 * math.pi / 60
     assert float(m.losses(3000, 110)) == pytest.approx(p * (1 / 0.96 - 1))
     assert np.shape(m.efficiency(np.array([1000.0, 2000.0]), 50.0)) == (2,)
+
+
+def test_no_load_loss_heats_a_turning_motor_without_torque():
+    from aerolap.config import ConfigError
+
+    m = _emrax()
+    assert float(m.losses(3000, 0)) == pytest.approx(float(m.no_load_loss(3000)))  # turning, no torque
+    assert float(m.no_load_loss(3000)) > 0.0
+    meas = _emrax(no_load_loss_W=[[6000, 1500], [0, 0], [3000, 450]])  # measured spin-down points, any order
+    assert float(meas.losses(4500, 0)) == pytest.approx(975.0) and float(meas.losses(8000, 0)) == 1500.0
+    cu = 3 * (110 / meas.kt) ** 2 * meas.r_phase
+    assert float(meas.losses(3000, 110)) == pytest.approx(cu + 450.0)  # part of every drive loss too
+    with pytest.raises(ConfigError):
+        _emrax(no_load_loss_W=[[1000, -5]])
+
+
+def test_energy_strategy_counts_the_coasting_motor_heat(ev_cfg):
+    from aerolap.analysis.energy_strategy import LapDP
+
+    from .conftest import DATA
+
+    dp = LapDP(VehicleModel(ev_cfg), Track.from_file(DATA / "tracks" / "fsk2026_endurance_smoothed.csv"),
+               SolverOptions.coarse())
+    vm = np.array([15.0])
+    pt = dp.car.powertrain
+    coast = float(np.ravel(dp._motor_heat(vm, np.array([0.0])))[0])
+    assert coast == pytest.approx(float(np.ravel(pt.motor.no_load_loss(pt.motor_rpm(vm)))[0]) * pt.n_motors)
+    assert coast > 0.0

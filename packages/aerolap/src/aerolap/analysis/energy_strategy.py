@@ -168,10 +168,11 @@ class LapDP:
         self._pack = None if pack is None else (float(pack.ocv()), float(pack.resistance), float(pack.cell_resistance()))
 
     def _motor_heat(self, vm, f_motor):
-        """Loss power of all motors (W) for a wheel force ``f_motor`` at speed ``vm`` (drive only)."""
+        """Loss power of all motors (W) for a wheel force ``f_motor`` at speed ``vm``; with no drive force
+        (coasting, braking) the turning motor still makes its no-load loss."""
         pt = self.car.powertrain
         rpm, torque, _ = pt.motor_point(vm, np.maximum(f_motor, 0.0))
-        return np.where(torque > 0.0, pt.motor.losses(rpm, torque), 0.0) * pt.n_motors
+        return pt.motor.losses(rpm, torque) * pt.n_motors
 
     @staticmethod
     def _heun(g, which, va, kk, d, slope=0.0):

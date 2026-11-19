@@ -53,5 +53,22 @@ def test_conicity_makes_the_car_pull(ev_cfg):
     straight = Track.from_segments([("straight", 120.0, 0.0, "")], name="s", closed=False)
     mf = load_vehicle_config(DATA / "vehicles" / "fsk2026_mf.yaml", warn=False)
     plain = _transient(mf, straight)
-    pull = _transient(with_overrides(mf, {"tires.mf": {"PVY1": 0.03}}), straight)
+    conic = with_overrides(mf, {"tires.mf": {"PVY1": 0.03}})
+    off = _transient(conic, straight)  # off by default: the .tir offsets do not change the run
+    assert np.allclose(off.channels["steer_deg"], plain.channels["steer_deg"])
+    pull = _transient(with_overrides(conic, {"tires.mf_offsets": True}), straight)
     assert abs(np.mean(pull.channels["steer_deg"][20:])) > abs(np.mean(plain.channels["steer_deg"][20:])) + 0.002
+
+
+def test_fixed_tyre_temperature_also_limits_transient_cornering(ev_cfg):
+    """A fixed cold tyre (grip factor f) corners like a tyre with mu x f - laterally too, not only in QSS."""
+    skidpad = Track.circle(9.125, name="skidpad")
+    cold = with_overrides(ev_cfg, {"tires.temperature_C": 30.0})
+    f = VehicleModel(cold).tyre_grip
+    low_mu = with_overrides(ev_cfg, {"tires.mu_x": ev_cfg["tires"]["mu_x"] * f, "tires.mu_y": ev_cfg["tires"]["mu_y"] * f})
+    a = TransientSolver(TransientOptions(iterations=1, qss=COARSE)).solve(VehicleModel(cold, features_for_level("L4")),
+                                                                          skidpad, "flying")
+    b = TransientSolver(TransientOptions(iterations=1, qss=COARSE)).solve(VehicleModel(low_mu, features_for_level("L4")),
+                                                                          skidpad, "flying")
+    assert f < 1.0
+    assert np.allclose(a.channels["steer_deg"], b.channels["steer_deg"], atol=1e-6)

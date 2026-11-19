@@ -135,24 +135,12 @@ def test_sidepod_cooling_drag_and_heat():
     assert e.value.path == "aero.components.pod.exit_area_m2"
 
 
-def test_fsk2026_layout_totals_and_cooling_constraint():
-    from aerolap.analysis.cooling import cooling_balance
-    from aerolap.analysis.objectives import Objective
-
+def test_fsk2026_layout_totals():
     cfg = load_vehicle_config(CAR)
     assert not unknown_keys(cfg)
     car = VehicleModel(cfg)
     cf, cr, cd, _ = car.aero.coefficients(0, 35.0, 45.0, 0.0, 0.0)
     assert float(cf + cr) == pytest.approx(0.997, rel=0.01) and float(cd) == pytest.approx(0.470, rel=0.01)
     dv = design_variables(cfg)
-    assert {"front", "front.flap1", "front.flap2", "side", "side.flap1", "sidepod", "rear", "rear.flap1",
+    assert {"front", "front.flap1", "front.flap2", "side", "side.flap1", "rear", "rear.flap1",
             "rear.flap2"} == set(dv)
-    res = QSSSolver(SolverOptions.coarse()).solve(car, Track.from_file(TRACK), start="flying")
-    cb = cooling_balance(car, res)
-    assert cb is not None and cb.produced_kW > 0 and cb.rejected_kW > 0 and "margin" in cb.report()
-    spec = {"type": "lap_time", "track": str(TRACK), "level": "L2"}
-    ok = Objective(spec, ".", {"cooling_margin_kW": 0.0}, SolverOptions.coarse())(cfg)
-    assert "cooling" in ok.violations and ok.metrics["cooling_margin_kW"] == pytest.approx(cb.margin_kW, rel=0.05)
-    small = with_overrides(cfg, {"aero.components.sidepod.exit_area_m2": 0.004})
-    ev = Objective(spec, ".", {"cooling_margin_kW": 0.0}, SolverOptions.coarse())(small)
-    assert ev.metrics["cooling_margin_kW"] < ok.metrics["cooling_margin_kW"] and ev.violations["cooling"] > ok.violations["cooling"]

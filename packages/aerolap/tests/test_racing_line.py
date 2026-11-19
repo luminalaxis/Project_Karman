@@ -65,6 +65,8 @@ def test_line_stays_inside_the_track_and_is_faster(simple_cfg, tmp_path):
     path = res.write_csv(tmp_path / "line.csv")
     again = Track.from_file(path)
     assert again.has_width and again.closed
+    if track.bank is not None:  # the bank of the input track survives the CSV
+        assert again.bank is not None and np.max(np.abs(again.bank)) > 0.0
     assert QSSSolver(opts).solve(car, again).lap_time == pytest.approx(res.lap.lap_time, rel=2e-3)
     assert "racing line" in res.report()
 
@@ -100,3 +102,19 @@ def test_line_cli_and_gui_task(tmp_path):
     res = TASKS["line"][1](load_vehicle_config(car), str(AUTOX), "L4", True, tmp_path / "gui", log=lambda m: None,
                            track_width=4.0)
     assert res.data.csv_path.exists() and res.images[0].exists() and "라인 랩" in res.summary
+
+
+def test_candidate_lines_keep_the_bank_and_road_settings(simple_cfg, tmp_path):
+    from aerolap.racing_line import line_track
+
+    ring = Track.circle(20.0, direction="left", ds=0.5).with_width(6.0)
+    ring.bank = np.full(len(ring.s), np.radians(5.0))  # banked for the left turn
+    ring.use_vertical_curvature = True
+    ref = reference_line(ring, 1.0)
+    trk = line_track(ref, np.zeros(ref.n), "line")
+    assert trk.bank is not None and np.allclose(trk.bank, np.radians(5.0)) and trk.is_3d
+    assert trk.use_vertical_curvature
+    res = optimise_line(VehicleModel(simple_cfg), ring, car_width=1.4, opts=SolverOptions.coarse())
+    again = Track.from_file(res.write_csv(tmp_path / "line.csv"))  # 'use the line as the track'
+    assert again.bank is not None and np.allclose(again.bank, np.radians(5.0), atol=1e-6)
+    assert again.use_vertical_curvature

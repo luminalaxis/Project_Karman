@@ -112,11 +112,12 @@ def read_ac_ai(path: str | Path) -> AcSpline:
 
 
 def track_from_ac(path: str | Path, name: str | None = None, closed: bool | None = None, ds: float = 0.5,
-                  cutoff_m: float = 10.0, reverse: bool = False) -> Track:
-    """Track from an Assetto Corsa AI spline (``cutoff_m``: smoothing wavelength, see ``Track.from_xy``)."""
+                  cutoff_m: float = 10.0, reverse: bool = False, bank: bool = False) -> Track:
+    """Track from an Assetto Corsa AI spline (``cutoff_m``: smoothing wavelength, see ``Track.from_xy``).
+    ``bank``: use the spline's 'camber' as the road bank - off by default, its sign is not verified yet."""
     sp = read_ac_ai(path)
     x, y, z = sp.x, sp.y, sp.elevation
-    left, right, bank = sp.side_left, sp.side_right, sp.camber
+    left, right, bank = sp.side_left, sp.side_right, (sp.camber if bank else None)
     if reverse:
         x, y, z = x[::-1], y[::-1], z[::-1]
         left, right = (None, None) if left is None else (right[::-1], left[::-1])
@@ -126,19 +127,24 @@ def track_from_ac(path: str | Path, name: str | None = None, closed: bool | None
                          bank=bank)
 
 
-def write_xy_csv(sp: AcSpline, path: str | Path, name: str, closed: bool, cutoff_m: float) -> Path:
-    """Centre-line CSV readable by ``Track.from_file`` (extra columns are kept for reference)."""
+def write_xy_csv(sp: AcSpline, path: str | Path, name: str, closed: bool, cutoff_m: float,
+                 bank: bool = False) -> Path:
+    """Centre-line CSV readable by ``Track.from_file`` (extra columns are kept for reference);
+    ``bank``: also the 'camber' as a ``bank_deg`` column (opt-in, sign not verified)."""
+    bank = bank and sp.camber is not None
     path = Path(path)
     with open(path, "w", newline="", encoding="utf-8") as fh:
         fh.write(f"# name: {name}\n# closed: {'true' if closed else 'false'}\n# cutoff_m: {cutoff_m:g}\n")
         fh.write("# source: Assetto Corsa AI spline, plan view (x, -z)\n")
         w = csv.writer(fh)
         cols = ["x_m", "y_m", "z_m"] + (["width_left_m", "width_right_m"] if sp.side_left is not None else [])
-        w.writerow(cols)
+        w.writerow(cols + (["bank_deg"] if bank else []))
         for i in range(sp.n):
             row = [f"{sp.x[i]:.3f}", f"{sp.y[i]:.3f}", f"{sp.elevation[i]:.3f}"]
             if sp.side_left is not None:
                 row += [f"{sp.side_left[i]:.3f}", f"{sp.side_right[i]:.3f}"]
+            if bank:
+                row.append(f"{math.degrees(sp.camber[i]):.4f}")
             w.writerow(row)
     return path
 
@@ -597,3 +603,50 @@ def resolve_optimumlap_link(raw: dict, base_dir: str | Path) -> tuple[dict, list
         cfg["name"] = name
     notes = [f"{olfile.name}: " + "; ".join(t.split(" ->")[0] for t in taken) + " read from OptimumLap"]
     return cfg, notes + warnings
+
+
+# ---------------------------------------------------------------------- suspension hardpoint workbook
+def resolve_hardpoint_link(raw: dict, base_dir: str | Path) -> tuple[dict, list[str]]:
+    """Apply a ``hardpoints: {file: x.xlsx, brake_share_front: 0.7}`` section of a vehicle YAML.
+
+    Reads the "지오메트리 정보" sheet of the suspension team's workbook (label in column B, front / rear
+    value in C / D) on every load, so the YAML follows the workbook: wheelbase, tracks, CG height, front
+    weight share, roll centres, anti-dive / anti-lift (workbook coefficient x that axle's brake share) and
+    anti-squat (rear side-view IC seen from the wheel centre: chassis-mounted motor). A missing file keeps
+    the YAML's own numbers and says so.
+    """
+    link = raw.get("hardpoints")
+    if not isinstance(link, dict) or not link.get("file"):
+        return raw, []
+    path = Path(link["file"])
+    path = path if path.is_absolute() else Path(base_dir) / path
+    try:
+        import openpyxl
+
+        ws = openpyxl.load_workbook(path, data_only=True, read_only=True)["지오메트리 정보"]
+        rows = {str(r[1]).strip(): r[2:5] for r in ws.iter_rows(min_col=1, max_col=5, values_only=True) if r[1]}
+    except (ImportError, OSError, KeyError) as exc:
+        return raw, [f"WARNING hardpoints: {path.name} not read ({exc}) - using the YAML values"]
+
+    def get(label: str, col: int = 0) -> float:
+        for key, vals in rows.items():
+            if key.startswith(label) and isinstance(vals[col], (int, float)):
+                return float(vals[col])
+        raise ValueError(f"hardpoints: '{label}' not found in {path.name} / 지오메트리 정보")
+
+    bf = float(link.get("brake_share_front", 0.7))
+    L, h = get("휠베이스"), get("CG 높이")
+    wheel_centre_h = get("리어 휠센터", 2) - get("리어 접지점", 2)  # column E = Z
+    squat = (get("측면 IC 높이", 1) - wheel_centre_h) / (get("측면 IC X", 1) - get("리어 휠센터", 0)) / (h / L)
+    raw = copy.deepcopy(raw)
+    geo, mass, sus = raw.setdefault("geometry", {}), raw.setdefault("mass", {}), raw.setdefault("suspension", {})
+    fr, rr = sus.setdefault("front", {}), sus.setdefault("rear", {})
+    geo["wheelbase_mm"] = L
+    geo["track_front_mm"], geo["track_rear_mm"] = get("트레드"), get("트레드", 1)
+    mass["cg_height_mm"] = h
+    mass["weight_dist_front"] = get("앞 무게 배분")
+    fr["roll_center_mm"], rr["roll_center_mm"] = get("롤센터 높이"), get("롤센터 높이", 1)
+    fr["anti_dive"] = round(get("안티다이브") * bf, 4)
+    rr["anti_lift"] = round(get("안티다이브", 1) * (1.0 - bf), 4)
+    rr["anti_squat"] = round(squat, 4)
+    return raw, [f"hardpoints from {path.name}: wheelbase {L:g}, CG {h:g} mm, anti-squat {squat:.3f}"]

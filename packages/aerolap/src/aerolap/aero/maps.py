@@ -291,6 +291,8 @@ class AeroModel:
             rc = raw.get(c.name, {})
             if rc.get("wake_of") is not None:
                 up = str(rc["wake_of"])
+                if up in raw and up not in names and up != c.name:
+                    continue  # the upstream device is switched off: no wake
                 if up not in names or up == c.name:
                     from ..config import ConfigError
 
@@ -299,8 +301,19 @@ class AeroModel:
                 self.wake[c.name] = (up, float(rc.get("wake_factor", 0.1)))
             if rc.get("reynolds") is not None:
                 self.comp_reynolds[c.name] = _reynolds(rc["reynolds"], f"aero.components.{c.name}.reynolds")
-        # upstream devices first (a device in a wake needs the ClA of the one ahead)
-        self.components.sort(key=lambda c: c.name in self.wake)
+        # upstream devices first (a device in a wake needs the ClA of the one ahead; chains A <- B <- C too)
+        from graphlib import CycleError, TopologicalSorter
+
+        try:
+            order = list(TopologicalSorter({c.name: [self.wake[c.name][0]] if c.name in self.wake else []
+                                            for c in self.components}).static_order())
+        except CycleError as exc:
+            from ..config import ConfigError
+
+            loop = " -> ".join(exc.args[1])
+            raise ConfigError(path=f"aero.components.{exc.args[1][0]}.wake_of", value=loop,
+                              condition="후류(wake_of)가 순환하면 안 됨") from None
+        self.components.sort(key=lambda c: order.index(c.name))
 
     def component_totals(self, rh_f=None, rh_r=None, roll=0.0, yaw=0.0, speed=None):
         """Front / rear downforce and drag areas of all components at an attitude (default: static),

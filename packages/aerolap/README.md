@@ -47,8 +47,9 @@ py -m aerolap.gui
 
 ![GUI](docs/img/gui.png)
 
-1. 위에서 **차량 YAML**과 **트랙**을 고릅니다(기본: 26년도 차, FSK 내구 트랙 평활화). OptimumLap `.olveh`/`.oltra`나 Assetto Corsa
-   `.ai`는 **"OptimumLap / AC 파일 가져오기..."**로 바로 변환해 불러옵니다. 차량 선택 창에서 `.olveh`를 골라 변환 없이 쓸 수도 있습니다.
+1. 맨 위 한 줄에서 **차량**·**트랙**(`...` = 찾기), 모델 레벨, 빠른 계산을 고릅니다(기본: 26년도 차, FSK 내구 트랙 평활화).
+   저장·다시 불러오기·결과 폴더는 **파일** 메뉴, CLI 전용 기능은 **추가 도구** 메뉴에 있습니다. OptimumLap `.olveh`/`.oltra`나 Assetto Corsa
+   `.ai`는 **파일 → "OptimumLap / AC 파일 가져오기..."**로 바로 변환해 불러옵니다. 차량 선택 창에서 `.olveh`를 골라 변환 없이 쓸 수도 있습니다.
    가져올 때 옵션 창이 뜹니다:
    - 차량(`.olveh`) 구동계: **OptimumLap 동등**(파일의 토크 곡선, 기본 — L0을 OptimumLap과 비교할 때) /
      **전체 모델**(EMRAX 228 모터 + 배터리, 파일 이름 끝 `_full`)
@@ -58,15 +59,15 @@ py -m aerolap.gui
    셀·팩 값을 고칩니다. 장치 위치·지상고·코드·갭·오버랩·엔드플레이트·냉각 같은 세부 값은 **"공력 장치 상세"**를 켜야
    보입니다(숨겨도 값은 그대로 쓰이고, 스윕 목록에는 모두 나옵니다). 바꾼 값은 파란색으로
    표시되고, "YAML로 저장"은 원래 파일 맨 위 주석(ASSUMED 목록)을 남깁니다
-3. **계산** 탭: 한 랩 / 효과 분해(L0→L5) / FSAE 종목 / 내구 에너지·배터리 / 코너링 한계·밸런스.
-   **에어로 없음 · 현재 · 최적화 비교**: 다운포스 장치를 모두 뗀 차(사이드포드 냉각은 유지, 장치 무게만큼 가벼움 -
+3. **계산** 탭: 한 랩 / 효과 분해(L0→L5) / FSAE 종목 / 내구 에너지·배터리 / 코너링 한계·밸런스, 내구 거리, 레이싱 라인.
+   **공력** 탭의 **에어로 없음 · 현재 · 최적화 비교**: 다운포스 장치를 모두 뗀 차(사이드포드 냉각은 유지, 장치 무게만큼 가벼움 -
    차량 YAML의 장치별 `mass_kg`, fsk2026은 앞 3.5 + 사이드 2.0 + 리어 4.5 = 10 kg 가정값, 칸에 넣으면 그 값을 우선),
    지금 차, 최적화된 차(최적화 YAML, 비우면 그 자리에서 모든 장치 동시 최적화)를 가속·스키드패드·오토크로스·
-   내구(배터리 한계 포함)로 비교합니다. 스윕·최적화 탭에서 최적화를 돌리면 결과 YAML이 자동으로 채워집니다
+   내구(배터리 한계 포함)로 비교합니다. 공력 탭에서 최적화를 돌리면 결과 YAML이 자동으로 채워집니다
 4. **다운포스** 탭: 속도·차고·롤·요를 정하고 윙 각도·플랩·스팬·높이 같은 에어로 변수를 고쳐 **프론트/사이드/리어 장치별 다운포스[N]**,
    앞/뒤 차축 하중, 항력을 표와 그래프로 봅니다(입력칸은 파라미터 탭과 같은 값을 공유, 공력 장치 상세 값도 모두 보임)
-5. **스윕 · 최적화** 탭: 값 하나를 범위로 바꿔 보는 **파라미터 스윕**(목적: 한 랩 / 내구 / 스키드패드), **공력 장치 최적화**
-   (끝나면 "최적값을 파라미터에 적용"). **"공력 전체 계산"** 버튼은 버튼 하나로 ① 현재 차 공력 작동 영역 ② 공력 교환비
+5. **스윕** 탭: 값 하나를 범위로 바꿔 보는 **파라미터 스윕**(목적: 한 랩 / 내구 / 스키드패드). **공력** 탭: 공력 장치 최적화
+   (끝나면 "최적값 적용"), 교환비, 패키지 자동 최적화, CFD 단면 순위. **"공력 전체 계산"** 버튼은 버튼 하나로 ① 현재 차 공력 작동 영역 ② 공력 교환비
    ③ 모든 장치(앞 윙·사이드 윙·사이드포드·리어 윙, 플랩 각도 포함) 동시 최적화 ④ 최적화된 차의 작동 영역 점검을 차례로
    돌립니다. 목적·언더스티어 범위·평가 횟수는 최적화 설정을 따르고, 결과는 `out/gui/aero_all/`에 단계별 폴더,
    요약 보고서 `aero_all.txt`, `optimized_vehicle.yaml`로 저장됩니다
@@ -256,7 +257,7 @@ aerolap sweep data/vehicles/fsk2026_mf.yaml --param tires.pressure_kPa=60:110:10
 
 예제 `data/vehicles/fsk2026_mf.yaml`은 **`base: fsk2026.yaml`**로 26년도 차를 그대로 읽고 타이어만 바꿉니다. `base:`는 다른 차량
 YAML을 먼저 읽고 이 파일에 적은 값만 덮어쓰는 키입니다(변형 차를 짧게 적을 때, 다른 폴더의 base여도 그 파일의 상대 경로가 유지됨).
-GUI 파라미터 탭의 **"Magic Formula .tir..."** 버튼으로 타이어 파일을 바꾸고 공기압·타원 지수를 고칠 수 있습니다.
+GUI 파라미터 탭의 **".tir 열기..."** 버튼으로 타이어 파일을 바꾸고 공기압·타원 지수를 고칠 수 있습니다.
 
 26년도 차, FSK 내구 트랙(평활화), 합성 `.tir`(83 kPa):
 
@@ -304,6 +305,9 @@ powertrain:
   그 위에 모터·인버터 손실을 따로 계산합니다(예전 `ev.drivetrain_efficiency`는 이 키로 옮겨지며 경고가 나옵니다)
 - 선택: `field_weakening_loss: true`(기저 속도 위 약계자 d축 전류 동손), `winding_temp_C`(권선 온도에서의 상저항),
   `efficiency_map: map.csv`(`rpm,torque_Nm,efficiency` 측정 맵). 손실과 효율은 같은 식이라 에너지·열 계산이 일치합니다
+- 무부하 손실: 모터가 토크 없이 돌기만 해도 베어링 마찰·풍손·자석 철손으로 열이 납니다. 기본은 데이터시트 맞춤식
+  `c0 + c1·n + c2·n²`이고, 측정값이 있으면 `no_load_loss_W: [[rpm, W], ...]`(무부하 회전 시험)로 바꿉니다.
+  타력 주행·제동 중에도 모터 발열에 들어갑니다(랩 열 계산, 에너지 최적 주행의 모터 온도 제한)
 - **모터 출력 통계**: 모든 `summary.txt`·`transient.txt`·`energy.txt`·`events.txt`에 모터 **피크**·**랩 평균**·**구동 중 평균**
   기계 출력(모든 모터 합), 전기 출력, 배터리 피크·평균 출력이 나옵니다(`motor_power_kW`, `motor_elec_power_kW` 채널)
 
@@ -383,7 +387,7 @@ aerolap energy-strategy data/vehicles/fsae_ev_aero.yaml data/tracks/fsae_enduran
   하나의 전략). 셀 팩 모델이면 출력 캡 계산의 SOC 단계마다 그 SOC의 차로 풀고 λ는 공통(라그랑주: 1 J당 시간 값이 경기 전체에서 같음)
 - 결과: 출력 캡과 같은 에너지에서의 내구 시간, 랩당 에너지 분해, **리프트 지점 표**(어디서 발을 떼고 몇 m 코스팅하는지 — 드라이버 지시용
   `lift_points.csv`), 랩당 시간–에너지 곡선(최적 주행 vs 출력 캡), 속도·배터리 출력 비교 그래프
-- GUI: 계산 탭 **"내구 에너지 최적 주행 (리프트 앤 코스트)"**
+- GUI: 계산 탭 **"에너지 최적 주행 (리프트·코스트)"**
 
 | 차 / 트랙 | 전력 제한 없음 | 출력 캡 (같은 에너지) | **에너지 최적 주행** | 이득 |
 |---|---|---|---|---|
@@ -569,7 +573,7 @@ aerolap run data/vehicles/fsk2026.yaml out/line/racing_line.csv
   속도로 칠한 최적 라인, 속도·곡률 비교), `trace.csv`
 - 트랙 폭 없는 트랙 CSV에 `# width_m: 3.5`를 적으면 일정 폭으로 씁니다. 차 폭 기본값 = 넓은 쪽 트레드 + 0.2 m(`--car-width`), 가장자리
   여유 0.2 m(`--clearance`). 차보다 좁은 곳은 입력 라인을 따라가고 경고합니다
-- GUI: 계산 탭 **"레이싱 라인"**(폭 칸 → 최적화 → **"최적 라인을 트랙으로 사용"**)
+- GUI: 계산 탭 **"레이싱 라인"**(폭 칸 → 최적화 → **"트랙으로 사용"**)
 
 26년도 차(`fsk2026.yaml`, L5):
 
@@ -600,7 +604,7 @@ aerolap run data/vehicles/fsk2026.yaml out/line/racing_line.csv
 | `aero` | `type`(constant/table/response_surface), `file`, `default_mode`, `cla_scale`, `cda_scale`, `cop_shift`, `drag_height_mm`, `floor_width_mm`, `bottoming_clearance_mm`, `cop_lateral_shift_mm_per_deg`, `strategy`, `plank_rate_N_per_mm`·`plank_friction`, `side_force_area_m2_per_deg`·`side_force_x_mm`, `symmetric`, `reynolds`, `unsteady_tau_s`, `hysteresis_mm`; 장치별 `wake_of`·`wake_factor`·`reynolds` |
 | `aero.strategy` | `type`(fixed/rule/ideal), `open_mode`(닫힌 모드 = `aero.default_mode`), `open_radius_m`, `min_length_m`, `min_speed_kmh`, `open_delay_s`, `close_delay_s`, `close_anticipation` |
 | `battery` | `capacity_kWh`, `usable_fraction`, `regen_power_kW` / 팩 모델: `series`, `parallel`, `soc`, `soc_min`, `soc_stages`, `interconnect_resistance_mOhm`, `max_current_A`, `temperature_C`, `cell:` (`capacity_Ah`, `resistance_mOhm`, `max_current_A`, `v_min`, `ocv`, `resistance_temp`, `resistance_soc`) / 열: `thermal:` (`cell_mass_g`, `cp_J_per_kgK`, `heat_capacity_J_per_K`, `start_C`, `ambient_C`, `cooling_W_per_K`, `max_C`, `derate`) |
-| `powertrain` | `type`(ev/ice), `drive`(rwd/awd), `differential`(lsd/open), `lsd_locking`, `torque_vectoring`, `efficiency`(구동계), `ev:` `motor`(emrax_228)·`motor_variant`·`motor_cooling`·`dc_voltage_V`·`controller_current_A`·`n_motors`·`inverter_efficiency`·`rotor_inertia_kgm2`·`field_weakening_loss`·`winding_temp_C`·`efficiency_map` 또는 `motor_torque_curve`·`max_rpm`, `reduction_ratio`, `power_limit_kW`, `motor_thermal:` (`coolant_C`, `max_C`, `start_C`, `conductance_W_per_K`, `heat_capacity_J_per_K`, `derate`) / `ice:` 토크 곡선·기어비·`shift_time_s` |
+| `powertrain` | `type`(ev/ice), `drive`(rwd/awd), `differential`(lsd/open), `lsd_locking`, `torque_vectoring`, `efficiency`(구동계), `ev:` `motor`(emrax_228)·`motor_variant`·`motor_cooling`·`dc_voltage_V`·`controller_current_A`·`n_motors`·`inverter_efficiency`·`rotor_inertia_kgm2`·`field_weakening_loss`·`winding_temp_C`·`efficiency_map`·`no_load_loss_W` 또는 `motor_torque_curve`·`max_rpm`, `reduction_ratio`, `power_limit_kW`, `motor_thermal:` (`coolant_C`, `max_C`, `start_C`, `conductance_W_per_K`, `heat_capacity_J_per_K`, `derate`) / `ice:` 토크 곡선·기어비·`shift_time_s` |
 
 aero map 없이 OptimumLap처럼 상수로 쓰려면:
 
@@ -666,6 +670,8 @@ aerolap run data/vehicles/fsae_ev_aero.yaml data/tracks/my_track.csv
   씁니다. `ideal_line.ai`도 같은 형식입니다. `.ai` 파일을 `run`, `events` 등에 바로 넣어도 됩니다
 - 폐회로 여부는 시작·끝 간격으로 판단합니다(`--closed yes/no`로 지정). `--reverse`는 반대 방향, `--cutoff`는 평활화 파장[m]
 - 고도는 `z_m` 열로 남고 경사로 랩 계산에 들어갑니다(FSK 2026 AC 라인: 고저차 0.5 m, 경사 ±0.6 %)
+- 스플라인의 `camber`를 노면 뱅크로 쓰려면 `--bank`(`bank_deg` 열). 부호(+ = 오른쪽이 높음)가 아직 검증되지 않아 기본은 꺼짐이고,
+  `.ai`를 바로 넣을 때도 뱅크는 쓰지 않습니다. 알려진 뱅크 코너로 부호를 확인한 뒤 켜세요
 - 바이너리 형식은 커뮤니티 문서(Content Manager의 `AiSpline`)를 따르며, FSK 2026 실제 파일(`data/import/fsk2026_fast_lane.ai`:
   v7, 872점, 1 m 간격, 트랙 폭 5.5 m)로 확인했습니다. 3D 모델(`.kn5`)에서 트랙 경계를 뽑지는 않습니다
 
@@ -869,7 +875,7 @@ Fluent 2D 결과 `runs/summary.csv`를 윙에 연결하면, 엘리먼트 수별 
 aerolap rank-sections data/vehicles/fsk2026_cfd_sections.yaml data/tracks/fsk2026_endurance_smoothed.csv data/aero_sections/synthetic_rear_summary.csv --component rear --objective endurance_time
 ```
 
-결과: `section_rank.txt`, `section_rank.png`(차 기준 목적값 vs 단면 최대 Cl·L/D), 1위를 넣은 `best_vehicle.yaml`. GUI "스윕 · 최적화" 탭의
+결과: `section_rank.txt`, `section_rank.png`(차 기준 목적값 vs 단면 최대 Cl·L/D), 1위를 넣은 `best_vehicle.yaml`. GUI "공력" 탭의
 "CFD 단면 순위"에서도 실행하고 "1위 단면을 차량에 적용"할 수 있습니다.
 
 **공력 장치 최적화** — 윙은 메인 받음각과 **플랩마다 각도**(°, 메인 코드선 기준; 기본 범위 현재값 ±15°, 엘리먼트에 `range`로 지정),
@@ -937,7 +943,7 @@ aero:
 4. **확인** — 시작 차와 상위 후보를 정밀 엔벨로프로 다시 계산, 제약을 만족하는 최선. 시작 차보다 나은 것이 없으면 시작 차를 돌려줌
 
 결과: 설계 공간 표(자유/보전), 옵션별 결과, 변수별 값어치, 바뀐 값(범위 끝에 닿은 값 표시 - 범위가 실제 한계인지 확인하세요),
-전후 목적·지표·제약, 장치 표, `optimized_vehicle.yaml`. GUI "스윕 · 최적화" 탭의 "공력 전체 자동 최적화"(보전 칸에 같은 패턴)와
+전후 목적·지표·제약, 장치 표, `optimized_vehicle.yaml`. GUI "공력" 탭의 "패키지 자동 최적화"(보전 칸에 같은 패턴)와
 "결과 패키지를 차량에 적용"도 있습니다.
 
 - 랩타임 목적이면 다운포스가 거의 항상 이득이라 코드·각도가 범위 끝으로 갑니다. 그 범위(규정·무게·구조)를 `bounds`로 정확히 주세요.
@@ -982,7 +988,7 @@ aerolap aero-envelope data/vehicles/fsk2026.yaml data/tracks/fsk2026_endurance_s
 
 차고·레이크·롤·요·속도의 분포(5/50/95 %), 상황별(제동/코너/가속) 공력 밸런스와 그 이동(제동 때 앞으로 가면 진입 오버스티어 경고),
 맵 범위 밖·바닥 닿음·바닥 막힘·앞 윙 지면 실속 구간의 비율과 위치를 내고, 차고 산점을 ClA 등고선 위에 그립니다.
-세 기능 모두 GUI에 버튼이 있습니다(계산 탭: 작동 영역, 스윕·최적화 탭: 교환비·장치 최적화).
+세 기능 모두 GUI에 버튼이 있습니다(계산 탭: 작동 영역, 공력 탭: 교환비·장치 최적화).
 
 **장치별 CFD 값 넣기**: 크기·받음각을 몇 개 바꿔 돌린 결과가 있으면 `points`로 넣습니다. 그 사이는 보간하므로 "L/D 일정" 가정 대신
 실제 다운포스·항력 관계가 최적 크기를 정합니다.
@@ -1040,7 +1046,7 @@ MATLAB/Octave에서 `S = load('out/ggv/ggv.mat')`, `L = load('out/run/trace.mat'
 | 비정상 지연 / 지면효과 히스테리시스 / 부호 있는 롤·요 맵 | `aero.unsteady_tau_s`, `hysteresis_mm`, `symmetric: false` | 과도 |
 | 타이어 온도 | `tires.temperature_C`(QSS 고정), `tires.grip_window`, `tires.thermal`(과도: 슬립 일률로 가열) | 마찰 계수 |
 | 휠 슬립(κ) 동역학 | `aerolap transient --wheels` (`tires.peak_slip_ratio`, `wheel_inertia_kgm2`) | 과도 |
-| 코니시티·플라이스티어 | MF `.tir`의 `PHY1-2`, `PVY1-2` | 과도(차가 한쪽으로 당김) |
+| 코니시티·플라이스티어 | MF `.tir`의 `PHY1-2`, `PVY1-2` + `tires.mf_offsets: true`(기본 꺼짐) | 과도(차가 한쪽으로 당김) |
 | 뱅크 / 크레스트·딥 | 트랙 CSV `bank_deg` 열, `# vertical_curvature: on` | 중력 배율별 g-g-V(QSS), 과도 |
 | 최소 시간 라인 | `aerolap line --method ocp --step 2` (`pip install casadi`) | 최적 제어(IPOPT), 최소 곡률 라인과 QSS 랩으로 비교 |
 | MPC 드라이버 | `aerolap transient --driver mpc` | 과도(트레일 브레이킹은 마찰원 제약에서 나옴) |

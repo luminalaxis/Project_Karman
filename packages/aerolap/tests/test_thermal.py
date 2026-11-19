@@ -20,7 +20,10 @@ FSK_TRACK = DATA / "tracks" / "fsk2026_endurance_smoothed.csv"
 
 @pytest.fixture(scope="module")
 def thermal_cfg():
-    return load_vehicle_config(DATA / "vehicles" / "fsk2026_thermal.yaml", warn=False)
+    # 5 Ah cells: enough energy that the cell temperature, not the battery energy, can set the power cap (the
+    # team's 4 Ah MEF-7 pack runs out of energy first, which would hide the thermal limits under test)
+    cfg = load_vehicle_config(DATA / "vehicles" / "fsk2026_thermal.yaml", warn=False)
+    return with_overrides(cfg, {"battery.cell.capacity_Ah": 5.0})
 
 
 def test_lumped_model_matches_the_analytic_solution():
@@ -39,9 +42,11 @@ def test_lumped_model_matches_the_analytic_solution():
 
 
 def test_cell_resistance_tables(thermal_cfg):
-    plain = BatteryPack.from_config(load_vehicle_config(DATA / "vehicles" / "fsk2026.yaml", warn=False)["battery"])
+    b = load_vehicle_config(DATA / "vehicles" / "fsk2026.yaml", warn=False)["battery"]
+    plain = BatteryPack.from_config(b)
     assert plain.r_factor() == 1.0
-    assert plain.resistance == pytest.approx(132 * 0.013 / 4 + 0.030)
+    assert plain.resistance == pytest.approx(b["series"] * b["cell"]["resistance_mOhm"] / 1e3 / b["parallel"]
+                                             + b["interconnect_resistance_mOhm"] / 1e3)
     hot = BatteryPack.from_config({**thermal_cfg["battery"], "temperature_C": 45.0, "soc": 0.8})
     cold = BatteryPack.from_config({**thermal_cfg["battery"], "temperature_C": 0.0, "soc": 0.8})
     assert hot.r_factor() == pytest.approx(0.8) and cold.r_factor() == pytest.approx(2.0)
@@ -92,7 +97,7 @@ def test_endurance_temperatures_and_temperature_limited_cap(thermal_cfg):
 
 def test_energy_optimal_driving_respects_the_cell_limit(thermal_cfg):
     # a warm pack with weak cooling: the cell limit (not the battery energy) is what binds
-    cfg = with_overrides(thermal_cfg, {"battery.thermal.cooling_W_per_K": 15.0, "battery.thermal.start_C": 45.0})
+    cfg = with_overrides(thermal_cfg, {"battery.thermal.cooling_W_per_K": 10.0, "battery.thermal.start_C": 45.0})
     st = endurance_strategy(cfg, Track.from_file(FSK_TRACK), 10.0, opts=SolverOptions.coarse(), pareto=False)
     assert st.cap.limited_by == "cells"
     assert st.mu > 0.0  # the cell heat had to be priced

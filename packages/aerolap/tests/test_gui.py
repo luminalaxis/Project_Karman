@@ -19,7 +19,7 @@ def test_editable_params_cover_aero_components():
     assert "mass.total_kg" in paths and "battery.cell.capacity_Ah" in paths and "battery.soc" in paths
     assert {"aero.components.front.aoa_deg", "aero.components.side.aoa_deg", "aero.components.rear.aoa_deg",
             "aero.components.front.elements.flap1.deflection_deg", "aero.components.front.elements.flap2.gap_mm",
-            "aero.components.rear.elements.flap2.deflection_deg", "aero.components.sidepod.exit_area_m2"} <= set(paths)
+            "aero.components.rear.elements.flap2.deflection_deg"} <= set(paths)
 
 
 def test_short_parameter_list_keeps_only_aero_design_knobs():
@@ -28,7 +28,7 @@ def test_short_parameter_list_keeps_only_aero_design_knobs():
     short = [p for _, p in editable_params(cfg, detail=False)]
     assert set(short) < set(full) and len([p for p in short if p.startswith("aero")]) <= 16
     assert {"aero.components.rear.aoa_deg", "aero.components.rear.elements.flap1.deflection_deg",
-            "aero.components.sidepod.exit_area_m2", "mass.total_kg"} <= set(short)
+            "mass.total_kg"} <= set(short)
     assert not any(k in p for p in short if p.startswith("aero") for k in ("gap_mm", "overlap_mm", "x_mm", "height_mm", "chord_mm"))
 
 
@@ -128,13 +128,42 @@ def test_window_builds_and_records_history(tmp_path):
     app.write_history(tmp_path / "h.csv")
     assert "mass.total_kg=300" in (tmp_path / "h.csv").read_text(encoding="utf-8-sig")
     assert len(app.tree.get_children()) == 1 and app.image_spans
+    res2 = TASKS["lap"][1](app.current_cfg(), str(TRACK), "L4", True, tmp_path / "lap2", log=lambda m: None)
+    app._add_history(res2, {"task": "한 랩", "changes": "", "setup": "y"})
+    app.compare_laps()
+    shown = app.text.get("1.0", "end")
+    assert "#2 = " in shown and "lap time" in shown and "mass.total_kg=300" in shown
     # downforce tab: aero entries share the parameter tab's variables
     assert app.df_entries and "aero.components.rear.aoa_deg" in app.df_entries
     app.param_vars["aero.components.rear.aoa_deg"].set("14")
     assert app.df_entries["aero.components.rear.aoa_deg"].cget("foreground") == "#0050c8"
     assert app.current_cfg()["aero"]["components"]["rear"]["aoa_deg"] == 14.0
     assert app.task_kwargs()["df_speeds"] == "40,60,80,100"
+    # extra tools window: a form for every CLI command
+    from aerolap.gui_tasks import cli_commands
+
+    app.open_tools()
+    combo = next(w for w in app.tools_win.winfo_children()[0].winfo_children() if w.winfo_class() == "TCombobox")
+    for name in combo.cget("values"):
+        combo.set(name)
+        app.tools_win.update_idletasks()
+    assert len(combo.cget("values")) == len(cli_commands())
     root.destroy()
+
+
+def test_cli_task_runs_any_command(tmp_path):
+    from aerolap.gui_tasks import CURRENT_VEHICLE, cli_argv, cli_commands, cli_fields
+
+    fields = cli_fields(cli_commands()["analyze"])
+    argv = cli_argv("analyze", fields, {"vehicles": "a.yaml;b.yaml", "track": "t1;t2", "coarse": "1"})
+    assert argv[:5] == ["analyze", "a.yaml", "b.yaml", "--track", "t1"] and argv[5:7] == ["--track", "t2"]
+    cfg = load_vehicle_config(CAR)
+    res = TASKS["cli"][1](cfg, str(TRACK), "L4", True, tmp_path, log=lambda m: None, cli_command="ggv",
+                          cli_values={"vehicle": CURRENT_VEHICLE, "coarse": "1"})
+    assert "ay_max" in res.text and [p.name for p in res.images] == ["ggv.png"]
+    with pytest.raises(ValueError):
+        TASKS["cli"][1](cfg, str(TRACK), "L4", True, tmp_path, log=lambda m: None, cli_command="ggv",
+                        cli_values={"vehicle": CURRENT_VEHICLE, "level": "L9"})
 
 
 def test_error_text_and_params():

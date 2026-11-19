@@ -22,7 +22,7 @@ import numpy as np
 
 @dataclass
 class SolverOptions:
-    ds: float = 0.5  # track step, m
+    ds: float = 0.1  # track step, m (trace.csv sample spacing)
     v_min: float = 1.0  # first speed of the envelope grid, m/s
     v_step: float = 0.5
     n_frac: int = 17  # lateral fraction samples

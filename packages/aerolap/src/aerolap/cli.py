@@ -44,9 +44,19 @@ def _opts(args) -> SolverOptions:
     return opts
 
 
+_LAST_OUT: list[Path] = []  # folders this command wrote to (main() adds the folder's 기록.xlsx)
+
+
 def _out(args, default: str) -> Path:
-    out = Path(args.out or default)
-    out.mkdir(parents=True, exist_ok=True)
+    """--out, or a new folder <records>/<command>/<run time> (``default`` names the kind without a command)."""
+    from .analysis.lap_report import run_dir
+
+    if args.out:
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+    else:
+        out = run_dir(getattr(args, "command", None) or Path(default).name)
+    _LAST_OUT.append(out)
     return out
 
 
@@ -89,9 +99,16 @@ def cmd_run(args) -> int:
         text += "\n" + cb.report()
     if getattr(car.tire, "model", "simple") != "simple":
         text += "\n\n" + car.tire.describe()
+    from .analysis.lap_report import analyze, log_to_excel, run_inputs
+
+    rep = analyze(car, res)
+    text += "\n\n" + rep.text()
     print(text)
     _write(out / "summary.txt", text)
     res.to_csv(out / "trace.csv")
+    xl = log_to_excel(rep, res, args.level, inputs=run_inputs(car, res), folder=out)
+    if xl:
+        print(f"excel: {xl} (비교 / 최고기록), run record: {out}")
     plotting.plot_lap(res, out / "lap.png")
     plotting.plot_track_map(res, out / "track_map.png")
     extra = ""
@@ -375,14 +392,16 @@ def cmd_import_track(args) -> int:
     sp = read_ac_ai(src)
     closed = None if args.closed is None else args.closed == "yes"
     name = args.name or src.parent.parent.name or src.stem
-    track = track_from_ac(src, name=name, closed=closed, cutoff_m=args.cutoff, reverse=args.reverse)
+    track = track_from_ac(src, name=name, closed=closed, cutoff_m=args.cutoff, reverse=args.reverse, bank=args.bank)
     if args.reverse:
         sp.x, sp.y, sp.elevation = sp.x[::-1], sp.y[::-1], sp.elevation[::-1]
         if sp.side_left is not None:
             sp.side_left, sp.side_right = sp.side_right[::-1], sp.side_left[::-1]
+        if sp.camber is not None:
+            sp.camber = -sp.camber[::-1]
     out = Path(args.out or f"{src.stem}.csv")
     out.parent.mkdir(parents=True, exist_ok=True)
-    write_xy_csv(sp, out, name, track.closed, args.cutoff)
+    write_xy_csv(sp, out, name, track.closed, args.cutoff, bank=args.bank)
     k = np.abs(track.kappa)
     step = np.hypot(np.diff(sp.x), np.diff(sp.y))
     lines = [f"Assetto Corsa AI spline v{sp.version}: {sp.n} points, spacing {np.median(step):.2f} m (median)",
@@ -832,6 +851,32 @@ def cmd_gps(args) -> int:
     return 0
 
 
+def cmd_analyze(args) -> int:
+    """Every vehicle x track x variant, one lap each, side by side."""
+    from .analysis.lap_report import analyze, compare_table
+
+    variants = [("", {})] + [(v, dict(parse_override(x) for x in v.split(","))) for v in (args.variant or [])]
+    reports = []
+    for vpath in args.vehicles:
+        base = _vehicle_cfg(argparse.Namespace(vehicle=vpath, set=args.set))
+        for tpath in args.track:
+            track = Track.from_file(tpath)
+            start = "flying" if track.closed else "standing"
+            for vname, over in variants:
+                cfg = with_overrides(base, over, "--variant") if over else base
+                car = VehicleModel(cfg, features_for_level(args.level))
+                res = QSSSolver(_opts(args)).solve(car, track, start=start)
+                label = f"{Path(vpath).stem} | {Path(tpath).stem}" + (f" | {vname}" if vname else "")
+                print(f"  {label}: {res.lap_time:.2f} s", flush=True)
+                reports.append(analyze(car, res, label, args.distance_km))
+    text = reports[0].text() if len(reports) == 1 else compare_table(reports)
+    print("\n" + text)
+    out = _out(args, "out/analyze")
+    _write(out / "analysis.txt", text)
+    print(f"\nwritten: {out}/analysis.txt")
+    return 0
+
+
 # ---------------------------------------------------------------------- parser
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="aerolap", description=(
@@ -850,13 +895,27 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--set", action="append", metavar="PATH=VALUE",
                         help="override a vehicle parameter, e.g. aero.cop_shift=0.02 (repeatable)")
         sp.add_argument("--out", help="output directory")
-        sp.add_argument("--ds", type=float, help="track step [m] (default 0.5)")
+        sp.add_argument("--ds", type=float, help="track step [m] (default 0.1)")
         sp.add_argument("--coarse", action="store_true", help="faster, slightly less accurate envelope")
 
     sp = sub.add_parser("run", help="simulate one lap")
     common(sp, track=True)
     sp.add_argument("--mat", action="store_true", help="also write the trace as MATLAB trace.mat")
     sp.set_defaults(func=cmd_run)
+
+    sp = sub.add_parser("analyze", help="lap analysis (limits, power ceiling, energy) and side-by-side comparison "
+                        "of vehicles x tracks x variants")
+    sp.add_argument("vehicles", nargs="+", help="vehicle YAML file(s)")
+    sp.add_argument("-t", "--track", action="append", required=True, help="track file (repeatable)")
+    sp.add_argument("--variant", action="append", metavar="PATH=VALUE[,PATH=VALUE]",
+                    help="extra run with these overrides, e.g. tires.mu_y=1.6 (repeatable)")
+    sp.add_argument("--set", action="append", metavar="PATH=VALUE", help="override for every run (repeatable)")
+    sp.add_argument("--level", default="full", help="model level L0 ... L5/full (default)")
+    sp.add_argument("--distance-km", type=float, default=22.0, help="endurance distance for the energy check")
+    sp.add_argument("--out", help="output directory")
+    sp.add_argument("--ds", type=float, help="track step [m] (default 0.1)")
+    sp.add_argument("--coarse", action="store_true", help="faster, slightly less accurate envelope")
+    sp.set_defaults(func=cmd_analyze)
 
     sp = sub.add_parser("transient", help="time-domain lap (suspension / aero dynamics) vs QSS")
     common(sp, track=True)
@@ -990,6 +1049,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="smoothing wavelength [m]: shorter wiggles of the line are treated as noise (default 10)")
     sp.add_argument("--reverse", action="store_true", help="drive the line in the opposite direction")
     sp.add_argument("--closed", choices=["yes", "no"], help="override the closed-loop detection")
+    sp.add_argument("--bank", action="store_true",
+                    help="Assetto Corsa: write the spline 'camber' as the road bank (bank_deg; sign not verified)")
     sp.add_argument("--ol-spiral", action="store_true",
                     help="OptimumLap track: radius changes linearly into a following same-direction corner, as "
                          "OptimumLap reads it (matches its lap time; the xy line then does not close)")
@@ -1149,13 +1210,26 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    _LAST_OUT.clear()
     try:
-        return int(args.func(args) or 0)
+        rc = int(args.func(args) or 0)
+        _record_books(args.command)
+        return rc
     except (ValueError, KeyError, FileNotFoundError) as exc:
         from .gui_tasks import error_text
 
         print("error:\n" + error_text(exc), file=sys.stderr)
         return 2
+
+
+def _record_books(command: str) -> None:
+    """Each output folder without a 기록.xlsx gets one: its text reports, then its trace csv."""
+    from .analysis.lap_report import RUN_BOOK, text_rows, write_run_book
+
+    for out in dict.fromkeys(_LAST_OUT):
+        if out.is_dir() and not (out / RUN_BOOK).exists():
+            text = "\n\n".join(f.read_text(encoding="utf-8") for f in sorted(out.glob("*.txt")))
+            write_run_book(out, text_rows(f"aerolap {command}", text))
 
 
 if __name__ == "__main__":

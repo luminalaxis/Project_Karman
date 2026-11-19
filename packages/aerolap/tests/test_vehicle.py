@@ -100,10 +100,27 @@ def test_removed_keys_are_migrated_with_a_warning(simple_raw):
     simple_raw["powertrain"]["ev"]["drivetrain_efficiency"] = 0.95
     simple_raw["battery"] = {"max_power_kW": 50.0}
     cfg = vehicle_config_from_dict(simple_raw)
-    assert cfg["powertrain"]["efficiency"] == 0.95
+    assert VehicleModel(cfg).powertrain.efficiency == 0.9  # no motor model: the ev key was never used
     assert cfg["powertrain"]["ev"]["power_limit_kW"] == 50.0  # min(60 rule limit, 50 pack)
     assert "max_power_kW" not in cfg["battery"]
     assert len(cfg["_warnings"]) == 2
+
+
+@pytest.mark.parametrize("ev_extra,eff,expect", [
+    ({"drivetrain_efficiency": 0.95}, 0.9, 0.95),  # motor model: the ev key was the one applied
+    ({}, 0.9, 0.97),  # old GUI-saved default 0.9 was ignored by the motor model
+    ({}, None, 0.97),
+])
+def test_motor_model_keeps_its_old_drivetrain_efficiency(ev_cfg, ev_extra, eff, expect):
+    import copy
+
+    from aerolap.config import vehicle_config_from_dict
+
+    raw = {k: copy.deepcopy(v) for k, v in ev_cfg.items() if not k.startswith("_")}
+    raw["powertrain"]["efficiency"] = eff
+    raw["powertrain"]["ev"].update(ev_extra)
+    cfg = vehicle_config_from_dict(raw, ev_cfg["_base_dir"])
+    assert VehicleModel(cfg).powertrain.efficiency == pytest.approx(expect)
 
 
 def test_anti_keys_belong_to_one_axle(simple_raw, tmp_path):

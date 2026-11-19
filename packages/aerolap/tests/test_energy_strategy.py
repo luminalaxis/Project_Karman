@@ -71,7 +71,8 @@ def test_open_track_is_refused(simple_cfg):
 
 def test_pack_model_uses_the_soc_stages(tmp_path):
     cfg = load_vehicle_config(DATA / "vehicles" / "fsk2026.yaml", warn=False)
-    cfg = with_overrides(cfg, {"battery.series": 120})  # smaller pack: the endurance must save energy
+    # smaller pack than the file's: the endurance must save energy
+    cfg = with_overrides(cfg, {"battery.series": round(0.9 * cfg["battery"]["series"])})
     st = endurance_strategy(cfg, Track.from_file(DATA / "tracks" / "fsk2026_endurance_smoothed.csv"), 22.0,
                             opts=SolverOptions.coarse(), pareto=False)
     assert len(st.stages) == 3 and all(s.soc is not None for s in st.stages)

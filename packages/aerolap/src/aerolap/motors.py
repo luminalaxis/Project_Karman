@@ -32,6 +32,9 @@ Options (``powertrain.ev``):
 * ``winding_temp_C`` - phase resistance at that winding temperature, ``R (1 + 0.00393 (T - 20))``;
 * ``efficiency_map`` - CSV ``rpm,torque_Nm,efficiency`` (measured points, scattered): efficiency from the
   map (linear inside, nearest point outside); losses follow as ``P (1 / eta - 1)``.
+* ``no_load_loss_W: [[rpm, W], ...]`` - measured no-load loss (motor spun with no torque: bearing friction,
+  windage, magnet iron loss), linear between the points, held flat outside; replaces ``c0 + c1 n + c2 n^2``.
+  It heats the motor whenever it turns - also while coasting or braking - and is part of every drive loss.
 
 ``losses`` is the one loss model and ``efficiency = P / (P + losses)``, so the energy and the thermal
 models always agree.
@@ -86,6 +89,7 @@ class Motor:
     speed_loss: tuple[float, float, float]  # c0, c1, c2
     field_weakening_loss: bool = False
     eff_map: object = None  # (LinearND, Nearest) interpolators of a measured efficiency map
+    no_load: tuple | None = None  # (rpm, W) points of a measured no-load loss, replaces speed_loss
 
     @classmethod
     def from_config(cls, ev: dict) -> "Motor":
@@ -127,6 +131,7 @@ class Motor:
             rotor_inertia=float(inertia) if inertia is not None else db["rotor_inertia_kgm2"][cooling],
             mass=db["mass_kg"][cooling], speed_loss=tuple(db["speed_loss_W"]),
             field_weakening_loss=bool(ev.get("field_weakening_loss", False)), eff_map=eff_map,
+            no_load=_no_load(ev.get("no_load_loss_W")),
         )
 
     @property
@@ -147,9 +152,16 @@ class Motor:
         t = np.minimum(t, self.peak_power / np.maximum(omega, 1e-9))
         return np.where(n <= self.max_rpm, t, 0.0)
 
-    def _model_losses(self, n, t):
+    def no_load_loss(self, rpm):
+        """Loss with no torque (friction, windage, iron), W - the motor heats this much just by turning."""
+        n = np.maximum(np.asarray(rpm, dtype=float), 0.0)
+        if self.no_load is not None:
+            return np.interp(n, *self.no_load)
         c0, c1, c2 = self.speed_loss
-        loss = 3.0 * (t / self.kt) ** 2 * self.r_phase + c0 + c1 * n + c2 * n * n
+        return c0 + c1 * n + c2 * n * n
+
+    def _model_losses(self, n, t):
+        loss = 3.0 * (t / self.kt) ** 2 * self.r_phase + self.no_load_loss(n)
         if self.field_weakening_loss:
             i_d = self.i_max * np.clip(1.0 - self.base_rpm / np.maximum(n, 1e-9), 0.0, 1.0)
             loss = loss + 3.0 * i_d * i_d * self.r_phase
@@ -187,6 +199,25 @@ class Motor:
         with np.errstate(divide="ignore", invalid="ignore"):
             eta = np.where(p > 1.0, p / (p + loss), 0.5)
         return np.clip(eta, 0.5, 0.97)
+
+
+def _no_load(points):
+    """``no_load_loss_W`` [[rpm, W], ...] -> (rpm, W) arrays sorted by rpm, or None."""
+    if points is None:
+        return None
+    from .config import ConfigError
+
+    try:
+        a = np.asarray(points, dtype=float)
+        ok = a.ndim == 2 and a.shape[1] == 2 and len(a) >= 1 and np.all(a[:, 1] >= 0.0) and np.all(a[:, 0] >= 0.0)
+    except (TypeError, ValueError):
+        ok = False
+    if not ok:
+        raise ConfigError(path="powertrain.ev.no_load_loss_W", value=points,
+                          condition="[[rpm, W], ...] 목록, rpm·W 0 이상",
+                          hint="무부하(토크 0)로 돌렸을 때의 손실, 예: [[0, 0], [3000, 450], [6000, 1500]]")
+    a = a[np.argsort(a[:, 0])]
+    return a[:, 0], a[:, 1]
 
 
 def _efficiency_map(path, base_dir):

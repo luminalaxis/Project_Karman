@@ -41,3 +41,9 @@ def simple_cfg(simple_raw):
 @pytest.fixture
 def ev_cfg():
     return load_vehicle_config(DATA / "vehicles" / "fsae_ev_aero.yaml")
+
+
+@pytest.fixture(autouse=True)
+def _excel_log_to_tmp(tmp_path, monkeypatch):
+    """Runs log to excel_data_analysis/; keep test runs out of the real workbook."""
+    monkeypatch.setattr("aerolap.analysis.lap_report.EXCEL_LOG", tmp_path / "results.xlsx")

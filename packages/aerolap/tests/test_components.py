@@ -196,7 +196,7 @@ def test_unknown_keys_are_reported_with_a_suggestion(ev_cfg):
 
 
 @pytest.mark.parametrize("over,path,needle", [
-    ({"battery.soc": 0.03}, "battery.soc", "battery.soc_min (0.05) < battery.soc"),
+    ({"battery.soc": 0.03}, "battery.soc", "battery.soc_min ("),
     ({"mass.weight_dist_front": 1.2}, "mass.weight_dist_front", "0 < 값 < 1"),
     ({"powertrain.drive": "fwd"}, "powertrain.drive", "rwd | awd"),
     ({"battery.parallel": 0}, "battery.parallel", "1 이상"),

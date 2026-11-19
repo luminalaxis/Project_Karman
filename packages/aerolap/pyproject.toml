@@ -18,6 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=7", "ruff"]
 ocp = ["casadi>=3.6"]
+excel = ["openpyxl>=3.1"]
 
 [project.scripts]
 aerolap = "aerolap.cli:main"

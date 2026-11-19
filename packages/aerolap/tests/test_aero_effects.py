@@ -29,6 +29,22 @@ def test_rear_wing_in_the_front_wing_wake_loses_downforce():
     assert float(b[0]) == pytest.approx(float(a[0]), rel=0.05)
 
 
+def test_wake_chains_cycles_and_switched_off_upstream_devices():
+    from aerolap.config import ConfigError
+
+    cfg = load_vehicle_config(CAR, warn=False)
+    # side (listed before rear) sits in the rear's wake, the rear in the front's: evaluated front, rear, side
+    chain = _static(with_overrides(cfg, {"aero.components.side.wake_of": "rear", "aero.components.rear.wake_of": "front"}))
+    assert np.isfinite(float(chain[0] + chain[1]))
+    with pytest.raises(ConfigError, match="wake_of"):
+        VehicleModel(with_overrides(cfg, {"aero.components.front.wake_of": "rear", "aero.components.rear.wake_of": "front"}))
+    # front wing switched off: the rear wing simply has no wake to sit in
+    off = {"aero.components.front.enabled": False}
+    a = _static(with_overrides(cfg, off))
+    b = _static(with_overrides(cfg, {**off, "aero.components.rear.wake_of": "front"}))
+    assert float(b[1]) == pytest.approx(float(a[1]))
+
+
 def test_reynolds_scaling(ev_cfg):
     cfg = with_overrides(ev_cfg, {"aero.reynolds": {"cl_exponent": 0.05, "cd_exponent": -0.1, "ref_speed_kmh": 60}})
     lo = _static(cfg, 60 / 3.6)

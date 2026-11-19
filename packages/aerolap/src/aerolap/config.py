@@ -128,6 +128,7 @@ DEFAULTS: dict[str, Any] = {
         "mf_file": None,  # Pacejka Magic Formula .tir file (null -> the simple tyre model above)
         "pressure_kPa": None,  # MF 6.1 inflation pressure; null -> INFLPRES / NOMPRES of the .tir
         "mf_mu_scaling": True,  # MF friction scaled to mu_x / mu_y at ref_load_N (track surface level)
+        "mf_offsets": False,  # transient: MF conicity / ply steer (PHY1-2, PVY1-2) - the car pulls to one side
         "temperature_C": None,  # fixed tyre temperature for the grip window below; null -> in the window (no loss)
         "grip_window": {"optimum_C": 80.0, "width_C": 50.0, "min_factor": 0.6},  # mu x max(min, 1-((T-opt)/w)^2)
         "thermal": None,  # transient tyre temperature model (dict, see below); null -> constant temperature
@@ -207,7 +208,8 @@ _AERO_MODE_KEYS = {"cl", "cd", "cla", "cda", "frontal_area_m2", "cop_front"}
 # keys the model reads, per section (anything else in a vehicle file is reported as a possible typo)
 KNOWN_KEYS: dict[str, set[str]] = {
     "": {"name", "environment", "mass", "geometry", "tires", "suspension", "brakes", "battery", "aero",
-         "powertrain"},
+         "powertrain", "hardpoints"},
+    "hardpoints": {"file", "brake_share_front"},
     "environment": {"temperature_C", "pressure_kPa", "altitude_m", "relative_humidity", "air_density_kg_m3"},
     "mass": {"total_kg", "weight_dist_front", "cg_height_mm", "unsprung_front_kg", "unsprung_rear_kg",
              "pitch_inertia_kgm2", "roll_inertia_kgm2", "yaw_inertia_kgm2"},
@@ -215,7 +217,7 @@ KNOWN_KEYS: dict[str, set[str]] = {
     "tires": {"radius_mm", "mu_x", "mu_y", "ref_load_N", "load_sensitivity", "min_mu_factor",
               "vertical_rate_N_per_mm", "peak_slip_deg", "camber_optimum_deg", "camber_sensitivity_per_deg2",
               "rolling_resistance", "combined_exponent", "mf_file", "mf", "pressure_kPa", "mf_mu_scaling",
-              "temperature_C", "grip_window", "thermal", "peak_slip_ratio", "wheel_inertia_kgm2"},
+              "temperature_C", "grip_window", "thermal", "peak_slip_ratio", "wheel_inertia_kgm2", "mf_offsets"},
     "tires.grip_window": {"optimum_C", "width_C", "min_factor"},
     "tires.thermal": {"start_C", "heat_capacity_J_per_K", "cooling_W_per_K", "cooling_W_per_K_per_mps", "heat_share",
                       "ambient_C"},
@@ -242,7 +244,7 @@ KNOWN_KEYS: dict[str, set[str]] = {
                    "torque_vectoring", "ev", "ice"},
     "powertrain.ev": {"motor", "motor_variant", "motor_cooling", "dc_voltage_V", "controller_current_A", "n_motors",
                       "reduction_ratio", "inverter_efficiency", "power_limit_kW", "field_weakening_loss",
-                      "winding_temp_C", "efficiency_map",
+                      "winding_temp_C", "efficiency_map", "no_load_loss_W",
                       "rotor_inertia_kgm2", "motor_torque_curve", "max_rpm", "motor_thermal"},
     "powertrain.ev.motor_thermal": {"coolant_C", "max_C", "start_C", "conductance_W_per_K", "heat_capacity_J_per_K",
                                     "cp_J_per_kgK", "derate"},
@@ -400,16 +402,25 @@ def migrate(raw: dict) -> tuple[dict, list[str]]:
     msgs: list[str] = []
     pt = raw.get("powertrain")
     ev = pt.get("ev") if isinstance(pt, dict) else None
+    # keep the efficiency the old code applied: with a motor model 'ev.drivetrain_efficiency' (default 0.97) and
+    # 'powertrain.efficiency' ignored; without one 'powertrain.efficiency' (default 0.9) and the ev key ignored
+    motor = isinstance(ev, dict) and bool(ev.get("motor")) and (pt.get("type", "ev") == "ev")
     if isinstance(ev, dict) and "drivetrain_efficiency" in ev:
         val = ev.pop("drivetrain_efficiency")
         old = pt.get("efficiency")
-        if ev.get("motor") or old is None:
+        if motor:
             pt["efficiency"] = val
             msgs.append(f"'powertrain.ev.drivetrain_efficiency' ({_fmt(val)}) moved to 'powertrain.efficiency'"
                         + (f" (replaces {_fmt(old)}, which the motor model did not use)" if old is not None else ""))
         else:
-            msgs.append("'powertrain.ev.drivetrain_efficiency' removed: without a motor model "
-                        f"'powertrain.efficiency' ({_fmt(old)}) is the drivetrain efficiency")
+            msgs.append("'powertrain.ev.drivetrain_efficiency' removed: without a motor model it was not used; "
+                        f"'powertrain.efficiency' ({_fmt(old if old is not None else 0.9)}) is the drivetrain "
+                        "efficiency")
+    elif motor and pt.get("efficiency") == 0.9:
+        # 0.9 = the old default every GUI-saved file repeated; the motor model used 0.97 instead
+        pt["efficiency"] = None
+        msgs.append("'powertrain.efficiency' 0.9 (the old default, not used with a motor model) -> null = 0.97 as "
+                    "before; set it again if 0.9 is meant")
     bat = raw.get("battery")
     if isinstance(bat, dict) and "regen_axle_share" in bat:
         bat.pop("regen_axle_share")
@@ -586,6 +597,14 @@ def load_vehicle_config(path: str | Path, warn: bool = True) -> dict:
                 raw, notes = resolve_optimumlap_link(raw, base_dir)
             except ValueError as exc:
                 raise ConfigError(f"{path.name}: {exc}") from None
+        if "hardpoints" in raw:
+            from .importers import resolve_hardpoint_link
+
+            try:
+                raw, more = resolve_hardpoint_link(raw, base_dir)
+            except ValueError as exc:
+                raise ConfigError(f"{path.name}: {exc}") from None
+            notes += more
     cfg = apply_defaults(raw)
     cfg["_base_dir"] = str(base_dir)
     cfg["_source"] = str(path)
@@ -731,8 +750,9 @@ def relocate_paths(cfg: dict, target_dir: str | Path) -> dict:
     for comp in (aero.get("components") or {}).values():
         if isinstance(comp, dict):
             fix(comp, "section_data")
-    if isinstance(out.get("tires"), dict):
-        fix(out["tires"], "mf_file")
+    for sec, key in _FILE_KEYS:
+        if isinstance(out.get(sec), dict) and sec != "aero":
+            fix(out[sec], key)
     ev = (out.get("powertrain") or {}).get("ev")
     if isinstance(ev, dict):
         for k in _EV_FILE_KEYS:
@@ -741,7 +761,8 @@ def relocate_paths(cfg: dict, target_dir: str | Path) -> dict:
 
 
 # relative data-file paths inside a vehicle file (rewritten when a base file from another folder is merged)
-_FILE_KEYS = (("aero", "file"), ("tires", "mf_file"), ("optimumlap", "file"), ("optimumlap", "base"))
+_FILE_KEYS = (("aero", "file"), ("tires", "mf_file"), ("optimumlap", "file"), ("optimumlap", "base"),
+              ("hardpoints", "file"))
 _EV_FILE_KEYS = ("efficiency_map",)
 
 

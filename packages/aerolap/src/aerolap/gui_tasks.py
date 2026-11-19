@@ -142,7 +142,7 @@ def _start(track: Track) -> str:
     return "flying" if track.closed else "standing"
 
 
-def task_lap(cfg, track_path, level, coarse, out_dir, log=print, **_) -> TaskResult:
+def task_lap(cfg, track_path, level, coarse, out_dir, log=print, distance_km=22.0, **_) -> TaskResult:
     from .cli import _summary_text
 
     track = Track.from_file(track_path)
@@ -155,8 +155,15 @@ def task_lap(cfg, track_path, level, coarse, out_dir, log=print, **_) -> TaskRes
     plotting.plot_track_map(res, out_dir / "track_map.png")
     from .analysis.cooling import cooling_balance
 
+    from .analysis.lap_report import analyze, log_to_excel, run_inputs
+
     cb = cooling_balance(car, res)
-    return TaskResult("한 랩", _summary_text(res) + ("\n" + cb.report() if cb else ""), [out_dir / "lap.png", out_dir / "track_map.png"], out_dir,
+    rep = analyze(car, res, endurance_km=distance_km)
+    xl = log_to_excel(rep, res, level, inputs=run_inputs(car, res), folder=out_dir)
+    if xl:
+        log(f"엑셀 비교: {xl} / 이번 기록: {out_dir}")
+    return TaskResult("한 랩", _summary_text(res) + ("\n" + cb.report() if cb else "") + "\n\n" + rep.text(),
+                      [out_dir / "lap.png", out_dir / "track_map.png"], out_dir, data=rep,
                       summary=f"랩 {res.lap_time:.3f} s | 최고 {res.v.max() * 3.6:.1f} km/h | "
                               f"에너지 {res.energy_J / 3.6e6:.4f} kWh")
 
@@ -614,7 +621,7 @@ TASKS = {
     "compare": ("효과 분해 (L0→L5)", task_compare),
     "events": ("FSAE 종목", task_events),
     "energy": ("내구 에너지 / 배터리", task_energy),
-    "strategy": ("내구 에너지 최적 주행 (리프트 앤 코스트)", task_strategy),
+    "strategy": ("에너지 최적 주행 (리프트·코스트)", task_strategy),
     "line": ("레이싱 라인 최적화", task_line),
     "cornering": ("코너링 한계 · 밸런스", task_cornering),
     "envelope": ("공력 작동 영역 · 맵 점검", task_envelope),
@@ -627,6 +634,147 @@ TASKS = {
     "auto_aero": ("공력 전체 자동 최적화 (보전 파라미터 제외 전부)", task_auto_aero),
     "rank_sections": ("CFD 단면 순위 (AERO_AUTOMATION)", task_rank_sections),
 }
+
+
+# ---------------------------------------------------------------- every CLI command in the GUI
+# The "추가 도구" window builds its form from the CLI parser itself, so every command and option of
+# ``aerolap <command>`` is reachable (new CLI options show up without GUI work).
+CURRENT_VEHICLE = "<현재 차량>"  # replaced by the vehicle as edited in the window
+CLI_LABELS = {  # commands the main window does not have first
+    "analyze": "결과 분석 · 일괄 비교 (차량 × 트랙 × 변형)",
+    "transient": "과도 응답 랩 (시간 영역, PID/MPC 드라이버)",
+    "ggv": "g-g-V 엔벨로프",
+    "sensitivity": "민감도 (파라미터별 미분)",
+    "optimize": "셋업 최적화 (spec YAML)",
+    "score": "대회 점수 환산",
+    "mc": "몬테카를로 순위 신뢰도",
+    "gps": "GPS 로그 vs 시뮬레이션",
+    "cfd-plan": "CFD 배치 계획 (AERO_AUTOMATION)",
+    "fit-map": "CFD 점 → 공력 맵 피팅",
+    "run": "한 랩 (전체 옵션: .mat 내보내기 등)",
+    "line": "레이싱 라인 (전체 옵션: 최적 제어 OCP 등)",
+    "energy": "내구 에너지 (전체 옵션: 파라미터 스윕 등)",
+}
+SKIP_DESTS = {"help", "func"}
+
+
+@dataclass
+class CliField:
+    dest: str
+    flag: str | None  # None = positional
+    kind: str  # "text" | "flag" | "choice"
+    default: str = ""
+    choices: tuple = ()
+    multi: bool = False  # several values, separated by ';'
+    help: str = ""
+    append: bool = False  # repeatable option (the flag goes before every value)
+
+
+def cli_commands() -> dict:
+    """{command: argparse sub-parser}, the GUI-first commands first."""
+    from .cli import build_parser
+
+    subs = next(a for a in build_parser()._actions if a.__class__.__name__ == "_SubParsersAction").choices
+    order = [c for c in CLI_LABELS if c in subs] + sorted(c for c in subs if c not in CLI_LABELS)
+    return {c: subs[c] for c in order}
+
+
+def cli_fields(parser, vehicle: str = CURRENT_VEHICLE, track: str = "") -> list[CliField]:
+    out = []
+    for a in parser._actions:
+        if a.dest in SKIP_DESTS or a.dest == "==SUPPRESS==":
+            continue
+        flag = a.option_strings[-1] if a.option_strings else None
+        append = a.__class__.__name__ == "_AppendAction"
+        multi = a.nargs in ("+", "*") or append
+        if a.nargs == 0:
+            f = CliField(a.dest, flag, "flag", "1" if a.default else "", help=a.help or "")
+        else:
+            d = "" if a.default is None else str(a.default)
+            if a.dest in ("vehicle", "vehicles"):
+                d = vehicle
+            elif a.dest == "track" and track:
+                d = track
+            f = CliField(a.dest, flag, "choice" if a.choices else "text", d, tuple(a.choices or ()), multi,
+                         a.help or "", append)
+        out.append(f)
+    return out
+
+
+def cli_argv(command: str, fields: list[CliField], values: dict[str, str]) -> list[str]:
+    """Command line from the form; multi-value fields split on ';'."""
+    argv = [command]
+    for f in fields:
+        v = str(values.get(f.dest, "")).strip()
+        if f.kind == "flag":
+            if v in ("1", "True", "true"):
+                argv.append(f.flag)
+            continue
+        if not v:
+            continue
+        parts = [p.strip() for p in v.split(";") if p.strip()] if f.multi else [v]
+        if f.flag is None:
+            argv += parts
+        elif f.append:  # --track a --track b
+            argv += [x for p in parts for x in (f.flag, p)]
+        else:
+            argv += [f.flag] + parts
+    return argv
+
+
+def task_cli(cfg, track_path, level, coarse, out_dir, log=print, cli_command="run", cli_values=None, **_) -> TaskResult:
+    """Run ``aerolap <cli_command>`` with the form values; stdout goes to the log and the result text."""
+    import contextlib
+    import io
+    import time
+
+    from .cli import build_parser
+    from .config import dump_config
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    car_yaml = out_dir / "current_vehicle.yaml"
+    dump_config(cfg, car_yaml)
+    parser = cli_commands()[cli_command]
+    fields = cli_fields(parser)
+    values = {k: str(v).replace(CURRENT_VEHICLE, str(car_yaml)) for k, v in (cli_values or {}).items()}
+    if any(f.dest == "out" for f in fields) and not values.get("out", "").strip():
+        values["out"] = str(out_dir)
+    argv = cli_argv(cli_command, fields, values)
+    log("aerolap " + " ".join(argv))
+
+    class _Lines(io.TextIOBase):  # each printed line to the log (raises TaskCancelled when cancelled)
+        def __init__(self):
+            self.buf, self.all = "", []
+
+        def write(self, s):
+            self.buf += s
+            while "\n" in self.buf:
+                line, self.buf = self.buf.split("\n", 1)
+                self.all.append(line)
+                log(line)
+            return len(s)
+
+    t0 = time.time()
+    w = _Lines()
+    # ponytail: redirects the process-wide stdout while the task runs - fine for one task at a time
+    with contextlib.redirect_stdout(w), contextlib.redirect_stderr(w):
+        try:
+            args = build_parser().parse_args(argv)
+            code = int(args.func(args) or 0)
+        except SystemExit as exc:  # argparse: bad option value
+            code = exc.code if isinstance(exc.code, int) else 2
+    w.write("\n")
+    text = "\n".join(w.all).strip()
+    if code:
+        raise ValueError(f"aerolap {cli_command} 실패 (코드 {code}):\n{text[-2000:]}")
+    folder = Path(values.get("out") or out_dir)
+    images = sorted(p for p in folder.glob("*.png") if p.stat().st_mtime >= t0 - 1) if folder.exists() else []
+    label = CLI_LABELS.get(cli_command, cli_command)
+    return TaskResult(label, "$ aerolap " + " ".join(argv) + "\n\n" + text, images, folder,
+                      summary=f"aerolap {cli_command}: " + (text.splitlines()[-1][:120] if text else "완료"))
+
+
+TASKS["cli"] = ("추가 도구 (CLI 명령)", task_cli)
 
 
 def import_file(path: str | Path, out_dir: Path, full: bool = False, smooth: float | None = None) -> str:

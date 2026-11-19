@@ -47,6 +47,10 @@ class RefLine:
     z: np.ndarray | None
     closed: bool
     h: float
+    bank: np.ndarray | None = None  # rad, cross slope of the road (carried to every candidate line)
+    use_grade: bool = True
+    grade_smoothing_m: float = 10.0
+    use_vertical_curvature: bool = False
 
     @property
     def n(self) -> int:
@@ -72,13 +76,15 @@ def reference_line(track: Track, step: float = 1.0) -> RefLine:
         py = py - frac * (y[-1] - y[0])
     wl, wr = np.interp(s, track.s, track.width_left), np.interp(s, track.s, track.width_right)
     z = None if track.z is None else np.interp(s, track.s, track.z)
+    bank = None if track.bank is None else np.interp(s, track.s, track.bank)
     if track.closed:
         tx, ty = np.roll(px, -1) - np.roll(px, 1), np.roll(py, -1) - np.roll(py, 1)
     else:
         tx, ty = np.gradient(px), np.gradient(py)
     norm = np.hypot(tx, ty)
     tx, ty = tx / norm, ty / norm
-    return RefLine(px, py, -ty, tx, wl, wr, z, track.closed, h)
+    return RefLine(px, py, -ty, tx, wl, wr, z, track.closed, h, bank, track.use_grade, track.grade_smoothing_m,
+                   track.use_vertical_curvature)
 
 
 def _curvature(x, y, closed: bool):
@@ -289,26 +295,34 @@ class LineResult:
             how = ("minimum-time optimal control" if math.isnan(self.best.weight)
                    else f"minimum curvature + length weight {self.best.weight:g}")
             fh.write(f"# cutoff_m: 3\n# source: aerolap racing line ({how}, chosen by QSS lap time)\n")
+            if not r.use_grade:  # the road settings of the input track
+                fh.write("# grade: off\n")
+            fh.write(f"# grade_smoothing_m: {r.grade_smoothing_m:g}\n")
+            if r.use_vertical_curvature:
+                fh.write("# vertical_curvature: on\n")
             w = csv.writer(fh)
-            w.writerow(["x_m", "y_m"] + (["z_m"] if r.z is not None else []) + ["width_left_m", "width_right_m"])
+            w.writerow(["x_m", "y_m"] + (["z_m"] if r.z is not None else []) + ["width_left_m", "width_right_m"]
+                       + (["bank_deg"] if r.bank is not None else []))
             for i in range(r.n):
                 row = [f"{x[i]:.3f}", f"{y[i]:.3f}"] + ([f"{r.z[i]:.3f}"] if r.z is not None else [])
-                w.writerow(row + [f"{wl[i]:.3f}", f"{wr[i]:.3f}"])
+                w.writerow(row + [f"{wl[i]:.3f}", f"{wr[i]:.3f}"]
+                           + ([f"{math.degrees(r.bank[i]):.4f}"] if r.bank is not None else []))
         self.csv_path = path
         return path
 
 
 def line_track(ref: RefLine, alpha: np.ndarray, name: str, ds: float = 0.5, cutoff_m: float = 3.0) -> Track:
-    """Track along the moved points (widths and elevation follow)."""
+    """Track along the moved points (widths, elevation, bank and the road settings follow)."""
     x, y = ref.x + alpha * ref.nx, ref.y + alpha * ref.ny
+    wl, wr, z, bank = ref.wl - alpha, ref.wr + alpha, ref.z, ref.bank
     if ref.closed:
-        x, y = np.append(x, x[0]), np.append(y, y[0])
-        wl, wr = np.append(ref.wl - alpha, ref.wl[0] - alpha[0]), np.append(ref.wr + alpha, ref.wr[0] + alpha[0])
-        z = None if ref.z is None else np.append(ref.z, ref.z[0])
-    else:
-        wl, wr, z = ref.wl - alpha, ref.wr + alpha, ref.z
-    return Track.from_xy(x, y, name=name, closed=ref.closed, ds=ds, cutoff_m=cutoff_m, z=z, width_left=wl,
-                         width_right=wr)
+        x, y, wl, wr = (np.append(a, a[0]) for a in (x, y, wl, wr))
+        z, bank = (None if a is None else np.append(a, a[0]) for a in (z, bank))
+    trk = Track.from_xy(x, y, name=name, closed=ref.closed, ds=ds, cutoff_m=cutoff_m, z=z, width_left=wl,
+                        width_right=wr, bank=bank)
+    trk.use_grade, trk.grade_smoothing_m = ref.use_grade, ref.grade_smoothing_m
+    trk.use_vertical_curvature = ref.use_vertical_curvature
+    return trk
 
 
 def optimise_line(vehicle, track: Track, car_width: float | None = None, clearance: float = 0.2,

@@ -22,14 +22,17 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from .config import ConfigError, get_path, load_vehicle_config, set_path, unknown_keys, validate
+from .analysis.lap_report import RUN_BOOK, LapReport, compare_table, records_root, run_dir, text_rows, write_run_book
 from .features import LEVELS
-from .gui_tasks import (ROOT, TASKS, TaskCancelled, changed_params, editable_params, error_params, error_text,
-                        import_file, save_vehicle_yaml)
+from .gui_tasks import (CLI_LABELS, CURRENT_VEHICLE, ROOT, TASKS, TaskCancelled, changed_params, cli_commands, cli_fields,
+                        editable_params, error_params, error_text, import_file, save_vehicle_yaml)
 
 DEFAULT_VEHICLE = ROOT / "data" / "vehicles" / "fsk2026.yaml"
 DEFAULT_TRACK = ROOT / "data" / "tracks" / "fsk2026_endurance_smoothed.csv"
 OUT = Path.cwd() / "out" / "gui"
 OBJECTIVES = {"한 랩 시간": "lap_time", "내구 시간 (배터리 한계)": "endurance_time", "스키드패드 시간": "skidpad_time"}
+# GUI task -> record folder kind (the CLI command name, so both land in the same folder)
+RECORD_KIND = {"lap": "run", "strategy": "energy-strategy", "exchange": "aero-exchange", "envelope": "aero-envelope"}
 MAIN_TASKS = ("lap", "compare", "events", "energy", "strategy", "cornering", "envelope")
 
 
@@ -59,6 +62,7 @@ class App:
         self.images: list[tk.PhotoImage] = []
         self.image_spans: list[tuple[int, int, Path]] = []
         self.history: list[dict] = []
+        self.lap_reports: list[LapReport] = []
         self.t_start = 0.0
 
         self.vehicle_var = tk.StringVar(value=str(DEFAULT_VEHICLE))
@@ -99,24 +103,37 @@ class App:
 
     # ------------------------------------------------------------------ layout
     def _build(self):
+        # menus hold the rarely used file / tool actions so the window itself only shows inputs and tasks
+        menu = tk.Menu(self.root)
+        fm = tk.Menu(menu, tearoff=0)
+        fm.add_command(label="차량 YAML 열기...", command=self.pick_vehicle)
+        fm.add_command(label="트랙 열기...", command=self.pick_track)
+        fm.add_command(label="차량 다시 불러오기", command=self.load_vehicle)
+        fm.add_command(label="차량 YAML로 저장...", command=self.save_vehicle)
+        fm.add_separator()
+        fm.add_command(label="OptimumLap / AC 파일 가져오기...", command=self.import_dialog)
+        fm.add_command(label="결과 폴더 열기", command=self.open_out)
+        menu.add_cascade(label="파일", menu=fm)
+        menu.add_command(label="추가 도구 (CLI 전체 기능)", command=self.open_tools)
+        self.root.config(menu=menu)
+
         top = ttk.Frame(self.root, padding=6)
         top.pack(fill="x")
-        for r, (label, var, cmd) in enumerate((("차량 YAML", self.vehicle_var, self.pick_vehicle),
+        for c, (label, var, cmd) in enumerate((("차량", self.vehicle_var, self.pick_vehicle),
                                                ("트랙", self.track_var, self.pick_track))):
-            ttk.Label(top, text=label, width=10).grid(row=r, column=0, sticky="w")
-            ttk.Entry(top, textvariable=var, width=110).grid(row=r, column=1, sticky="we", padx=4)
-            ttk.Button(top, text="찾기...", command=cmd).grid(row=r, column=2)
-        ttk.Button(top, text="차량 다시 불러오기", command=self.load_vehicle).grid(row=0, column=3, padx=4)
-        ttk.Button(top, text="OptimumLap / AC 파일 가져오기...", command=self.import_dialog).grid(row=1, column=3, padx=4)
-        opts = ttk.Frame(top)
-        opts.grid(row=2, column=0, columnspan=4, sticky="w", pady=4)
-        ttk.Label(opts, text="모델 레벨").pack(side="left")
-        ttk.Combobox(opts, textvariable=self.level_var, values=list(LEVELS), width=5, state="readonly").pack(
-            side="left", padx=4)
-        ttk.Label(opts, text="L0 = OptimumLap 방식(점질량) … L5 = 전체 모델", foreground="#666").pack(side="left", padx=6)
-        ttk.Checkbutton(opts, text="빠른 계산(거친 엔벨로프, 오차 약 0.1 %)", variable=self.coarse_var).pack(
-            side="left", padx=12)
+            ttk.Label(top, text=label).grid(row=0, column=3 * c, sticky="w", padx=(8 if c else 0, 2))
+            ent = ttk.Entry(top, textvariable=var, width=30)
+            ent.grid(row=0, column=3 * c + 1, sticky="we")
+            # long paths: keep the file name (the end) in view
+            var.trace_add("write", lambda *_, e=ent: e.after_idle(e.xview_moveto, 1.0))
+            ent.bind("<Configure>", lambda ev: ev.widget.xview_moveto(1.0))
+            ttk.Button(top, text="...", width=3, command=cmd).grid(row=0, column=3 * c + 2)
+        ttk.Label(top, text="레벨").grid(row=0, column=6, padx=(12, 2))
+        ttk.Combobox(top, textvariable=self.level_var, values=list(LEVELS), width=4, state="readonly").grid(
+            row=0, column=7)
+        ttk.Checkbutton(top, text="빠른 계산", variable=self.coarse_var).grid(row=0, column=8, padx=(8, 0))
         top.columnconfigure(1, weight=1)
+        top.columnconfigure(4, weight=1)
 
         # status row (bottom): progress, cancel, message
         bottom = ttk.Frame(self.root, padding=(6, 2))
@@ -125,9 +142,9 @@ class App:
         self.progress.pack(side="left")
         self.cancel_btn = ttk.Button(bottom, text="취소", command=self.cancel_task, state="disabled")
         self.cancel_btn.pack(side="left", padx=6)
-        self.status = ttk.Label(bottom, text="준비", anchor="w")
+        self.status = ttk.Label(bottom, text="준비 (결과는 out/gui/ 에 저장, 그래프 더블클릭 = 원본 이미지)", anchor="w")
         self.status.pack(side="left", fill="x", expand=True)
-        self.log = tk.Text(self.root, height=6, font=("Consolas", 9), background="#f4f4f4")
+        self.log = tk.Text(self.root, height=4, font=("Consolas", 9), background="#f4f4f4")
         self.log.pack(side="bottom", fill="x")
 
         pan = ttk.PanedWindow(self.root, orient="horizontal")
@@ -138,40 +155,31 @@ class App:
         pan.add(right, weight=1)
         self.task_buttons: list[ttk.Button] = []
 
-        # --- tab 1: single calculations
-        tasks = ttk.Frame(left, padding=8)
-        left.add(tasks, text="계산")
-        for key in MAIN_TASKS:
-            self._task_button(tasks, key).pack(fill="x", pady=3)
-        g = ttk.LabelFrame(tasks, text="내구 / 에너지 설정", padding=6)
+        # --- tab: single calculations
+        tasks = self._scroll_tab(left, "계산")
+        grid = ttk.Frame(tasks)
+        grid.pack(fill="x")
+        for i, key in enumerate(MAIN_TASKS):
+            self._task_button(grid, key).grid(row=i // 2, column=i % 2, sticky="we", padx=2, pady=2)
+        grid.columnconfigure((0, 1), weight=1, uniform="b")
+        g = ttk.LabelFrame(tasks, text="내구 / 에너지", padding=6)
         g.pack(fill="x", pady=8)
         self._row(g, 0, "내구 거리 [km]", self.distance_var)
-        ttk.Checkbutton(g, text="공력 패키지 크기 스윕 포함 (현재 값 × 0.6 … 1.4)",
+        ttk.Checkbutton(g, text="공력 패키지 크기 스윕 포함 (×0.6 … 1.4)",
                         variable=self.sweep_wing_var).grid(row=1, column=0, columnspan=2, sticky="w")
-        ln = ttk.LabelFrame(tasks, text="레이싱 라인 (트랙 폭 안에서)", padding=6)
-        ln.pack(fill="x", pady=(0, 8))
-        self._row(ln, 0, "트랙 폭 [m] (빈칸 = 파일의 폭)", self.track_width_var)
-        self._task_button(ln, "line", "레이싱 라인 최적화").grid(row=1, column=0, columnspan=2, sticky="we", pady=2)
-        self.use_line_btn = ttk.Button(ln, text="최적 라인을 트랙으로 사용", command=self.use_line, state="disabled")
-        self.use_line_btn.grid(row=2, column=0, columnspan=2, sticky="we")
-        cmpf = ttk.LabelFrame(tasks, text="에어로 없음 · 현재 · 최적화 비교 (YAML 빈칸 = 지금 최적화)", padding=4)
-        cmpf.pack(fill="x", pady=(0, 6))
-        ttk.Label(cmpf, text="최적화 YAML").grid(row=0, column=0, sticky="w")
-        ttk.Entry(cmpf, textvariable=self.cmp_yaml_var, width=26).grid(row=0, column=1, sticky="we")
-        ttk.Button(cmpf, text="찾기...", command=self.pick_cmp_yaml).grid(row=0, column=2)
-        ttk.Label(cmpf, text="패키지 무게 [kg]").grid(row=1, column=0, sticky="w")
-        ttk.Entry(cmpf, textvariable=self.cmp_mass_var, width=8).grid(row=1, column=1, sticky="w", pady=1)
-        self._task_button(cmpf, "aero_compare", "비교 실행").grid(row=1, column=1, columnspan=2, sticky="e")
-        cmpf.columnconfigure(1, weight=1)
-        ttk.Button(tasks, text="결과 폴더 열기", command=self.open_out).pack(fill="x")
-        ttk.Label(tasks, text="결과는 out/gui/<작업>/ 에도 저장됩니다.\n그래프를 더블클릭하면 원본 이미지가 열립니다.",
-                  foreground="#666", justify="left").pack(anchor="w", pady=4)
+        ln = ttk.LabelFrame(tasks, text="레이싱 라인", padding=6)
+        ln.pack(fill="x")
+        self._row(ln, 0, "트랙 폭 [m] (빈칸=파일)", self.track_width_var)
+        self._task_button(ln, "line", "최적화").grid(row=1, column=0, sticky="we", pady=2, padx=(0, 2))
+        self.use_line_btn = ttk.Button(ln, text="트랙으로 사용", command=self.use_line, state="disabled")
+        self.use_line_btn.grid(row=1, column=1, sticky="we", pady=2)
+        ln.columnconfigure((0, 1), weight=1, uniform="b")
 
-        # --- tab 2: sweep / optimisation
-        opt = ttk.Frame(left, padding=8)
-        left.add(opt, text="스윕 · 최적화")
-        sw = ttk.LabelFrame(opt, text="파라미터 스윕 (값 하나를 바꿔 가며 비교)", padding=6)
+        # --- tab: parameter sweep
+        swt = self._scroll_tab(left, "스윕")
+        sw = ttk.LabelFrame(swt, text="파라미터 스윕 (값 하나를 바꿔 가며 비교)", padding=6)
         sw.pack(fill="x")
+        opt = self._scroll_tab(left, "공력")
         ttk.Label(sw, text="파라미터").grid(row=0, column=0, sticky="w")
         self.sw_combo = ttk.Combobox(sw, textvariable=self.sw_param_var, width=34, state="readonly")
         self.sw_combo.grid(row=0, column=1, sticky="w")
@@ -184,11 +192,8 @@ class App:
             row=4, column=1, sticky="w")
         self._task_button(sw, "sweep", "스윕 실행").grid(row=5, column=0, columnspan=2, sticky="we", pady=4)
 
-        ex = ttk.LabelFrame(opt, text="공력 교환비 (목적은 아래 공력 장치 최적화의 목적)", padding=6)
-        ex.pack(fill="x", pady=(10, 0))
-        self._task_button(ex, "exchange", "교환비 계산: ClA·CdA·밸런스·질량·장치별 1단위의 값어치").pack(fill="x")
-        a = ttk.LabelFrame(opt, text="공력 장치 최적화 (윙 받음각 / 바닥 크기)", padding=6)
-        a.pack(fill="x", pady=10)
+        a = ttk.LabelFrame(opt, text="공통 설정 · 장치 최적화 (윙 받음각 / 바닥 크기)", padding=6)
+        a.pack(fill="x")
         ttk.Label(a, text="목적").grid(row=0, column=0, sticky="w")
         ttk.Combobox(a, textvariable=self.obj_var, values=list(OBJECTIVES)[:2], width=22, state="readonly").grid(
             row=0, column=1, sticky="w")
@@ -197,18 +202,17 @@ class App:
         self._row(a, 3, "언더스티어 지수 하한", self.us_lo_var)
         self._row(a, 4, "언더스티어 지수 상한", self.us_hi_var)
         self._row(a, 5, "최적화 평가 횟수", self.evals_var)
-        self._task_button(a, "aero_split", "최적화 실행").grid(row=6, column=0, columnspan=2, sticky="we", pady=4)
-        self._task_button(a, "aero_all", "공력 전체 계산 (작동 영역 → 교환비 → 최적화 → 최적 차 점검)").grid(
-            row=7, column=0, columnspan=2, sticky="we", pady=(0, 4))
-        self.apply_btn = ttk.Button(a, text="최적값을 파라미터에 적용", command=self.apply_optimum, state="disabled")
-        self.apply_btn.grid(row=8, column=0, columnspan=2, sticky="we")
-        ttk.Label(opt, text="언더스티어 지수 > 1: 앞이 먼저 한계(안정), < 1: 오버스티어.\n"
-                            "하한은 '코너링 한계 · 밸런스'에 나오는 저속 값보다 높게 잡을 수 없습니다\n"
-                            "(저속 밸런스는 스프링·ARB가 정하고 공력으로는 못 바꿉니다).",
-                  foreground="#666", justify="left").pack(anchor="w")
+        ttk.Label(a, text="언더스티어 지수 >1 안정, <1 오버스티어 (하한 ≤ 저속 값)",
+                  foreground="#666").grid(row=6, column=0, columnspan=2, sticky="w")
+        self._task_button(a, "aero_split", "최적화 실행").grid(row=7, column=0, sticky="we", pady=4, padx=(0, 2))
+        self.apply_btn = ttk.Button(a, text="최적값 적용", command=self.apply_optimum, state="disabled")
+        self.apply_btn.grid(row=7, column=1, sticky="we", pady=4)
+        self._task_button(a, "exchange", "교환비 (1단위의 값어치)").grid(row=8, column=0, sticky="we", padx=(0, 2))
+        self._task_button(a, "aero_all", "전체 계산 (영역→교환비→최적화)").grid(row=8, column=1, sticky="we")
+        a.columnconfigure((0, 1), weight=1, uniform="b")
 
-        au = ttk.LabelFrame(opt, text="공력 전체 자동 최적화 (보전 파라미터 외 전부, 목적·밸런스는 위 설정)", padding=6)
-        au.pack(fill="x", pady=(0, 6))
+        au = ttk.LabelFrame(opt, text="패키지 자동 최적화 (보전 외 전부, 목적·밸런스는 위 설정)", padding=6)
+        au.pack(fill="x", pady=8)
         ttk.Label(au, text="보전(고정)").grid(row=0, column=0, sticky="w")
         ttk.Entry(au, textvariable=self.fix_var, width=30).grid(row=0, column=1, sticky="we")
         ttk.Label(au, text="예: rear, *.span_m, @position, front.elements.main.chord_mm",
@@ -216,27 +220,35 @@ class App:
         ttk.Checkbutton(au, text="장치·플랩 on/off 옵션도 탐색", variable=self.auto_options_var).grid(
             row=2, column=0, columnspan=2, sticky="w")
         self._row(au, 3, "평가 횟수", self.auto_evals_var)
-        self._task_button(au, "auto_aero", "전체 자동 최적화 실행").grid(row=4, column=0, columnspan=2, sticky="we", pady=2)
-        self.apply_auto_btn = ttk.Button(au, text="결과 패키지를 차량에 적용", command=self.apply_auto,
-                                         state="disabled")
-        self.apply_auto_btn.grid(row=5, column=0, columnspan=2, sticky="we")
+        self._task_button(au, "auto_aero", "자동 최적화 실행").grid(row=4, column=0, sticky="we", pady=2, padx=(0, 2))
+        self.apply_auto_btn = ttk.Button(au, text="결과 적용", command=self.apply_auto, state="disabled")
+        self.apply_auto_btn.grid(row=4, column=1, sticky="we", pady=2)
+        au.columnconfigure((0, 1), weight=1, uniform="b")
 
         cfd = ttk.LabelFrame(opt, text="CFD 단면 순위 (AERO_AUTOMATION summary.csv)", padding=6)
-        cfd.pack(fill="x", pady=6)
+        cfd.pack(fill="x")
         ttk.Entry(cfd, textvariable=self.section_csv_var, width=34).grid(row=0, column=0, columnspan=2, sticky="we")
-        ttk.Button(cfd, text="찾기...", command=self.pick_section_csv).grid(row=0, column=2)
+        ttk.Button(cfd, text="...", width=3, command=self.pick_section_csv).grid(row=0, column=2)
         ttk.Label(cfd, text="장치").grid(row=1, column=0, sticky="w")
         ttk.Combobox(cfd, textvariable=self.section_comp_var, values=["front", "rear"], width=8,
                      state="readonly").grid(row=1, column=1, sticky="w")
-        self._task_button(cfd, "rank_sections", "순위 계산 (목적·밸런스는 위 최적화 설정)").grid(
-            row=2, column=0, columnspan=3, sticky="we", pady=2)
-        self.apply_section_btn = ttk.Button(cfd, text="1위 단면을 차량에 적용", command=self.apply_section,
-                                            state="disabled")
-        self.apply_section_btn.grid(row=3, column=0, columnspan=3, sticky="we")
+        self._task_button(cfd, "rank_sections", "순위 계산").grid(row=2, column=0, sticky="we", pady=2, padx=(0, 2))
+        self.apply_section_btn = ttk.Button(cfd, text="1위 단면 적용", command=self.apply_section, state="disabled")
+        self.apply_section_btn.grid(row=2, column=1, columnspan=2, sticky="we", pady=2)
+        cfd.columnconfigure((0, 1), weight=1, uniform="b")
+
+        cmpf = ttk.LabelFrame(opt, text="에어로 없음 · 현재 · 최적화 비교 (YAML 빈칸 = 지금 최적화)", padding=6)
+        cmpf.pack(fill="x", pady=8)
+        ttk.Label(cmpf, text="최적화 YAML").grid(row=0, column=0, sticky="w")
+        ttk.Entry(cmpf, textvariable=self.cmp_yaml_var, width=26).grid(row=0, column=1, sticky="we")
+        ttk.Button(cmpf, text="...", width=3, command=self.pick_cmp_yaml).grid(row=0, column=2)
+        ttk.Label(cmpf, text="패키지 무게 [kg]").grid(row=1, column=0, sticky="w")
+        ttk.Entry(cmpf, textvariable=self.cmp_mass_var, width=8).grid(row=1, column=1, sticky="w", pady=1)
+        self._task_button(cmpf, "aero_compare", "비교 실행").grid(row=1, column=1, columnspan=2, sticky="e")
+        cmpf.columnconfigure(1, weight=1)
 
         # --- tab: downforce per device (front / side / rear) from the aero variables
-        dfr = ttk.Frame(left, padding=8)
-        left.add(dfr, text="다운포스")
+        dfr = self._scroll_tab(left, "다운포스")
         cond = ttk.LabelFrame(dfr, text="조건", padding=6)
         cond.pack(fill="x")
         ttk.Label(cond, text="속도 [km/h] (쉼표)").grid(row=0, column=0, sticky="w")
@@ -246,50 +258,28 @@ class App:
         self._row(cond, 3, "롤 [deg]", self.df_roll_var)
         self._row(cond, 4, "요 (차체 슬립각) [deg]", self.df_yaw_var)
         self._task_button(dfr, "downforce", "장치별 다운포스 계산").pack(fill="x", pady=6)
-        ttk.Label(dfr, text="에어로 변수 (파라미터 탭과 같은 값 - 여기서 바꿔도 함께 바뀝니다)",
-                  foreground="#666").pack(anchor="w")
-        dwrap = ttk.Frame(dfr)
-        dwrap.pack(fill="both", expand=True)
-        dcanvas = tk.Canvas(dwrap, highlightthickness=0)
-        dsb = ttk.Scrollbar(dwrap, orient="vertical", command=dcanvas.yview)
-        self.df_frame = ttk.Frame(dcanvas)
-        self.df_frame.bind("<Configure>", lambda e: dcanvas.configure(scrollregion=dcanvas.bbox("all")))
-        dcanvas.create_window((0, 0), window=self.df_frame, anchor="nw")
-        dcanvas.configure(yscrollcommand=dsb.set)
-        dcanvas.pack(side="left", fill="both", expand=True)
-        dsb.pack(side="right", fill="y")
-        dcanvas.bind("<Enter>", lambda e: dcanvas.bind_all("<MouseWheel>", lambda ev: dcanvas.yview_scroll(
-            -1 if ev.delta > 0 else 1, "units")))
-        dcanvas.bind("<Leave>", lambda e: dcanvas.unbind_all("<MouseWheel>"))
+        ttk.Label(dfr, text="에어로 변수 (파라미터 탭과 같은 값)", foreground="#666").pack(anchor="w")
+        self.df_frame = ttk.Frame(dfr)
+        self.df_frame.pack(fill="x")
 
-        # --- tab 3: parameters (scrollable)
+        # --- tab: parameters (tool bars fixed, list scrolls)
         pframe = ttk.Frame(left)
         left.add(pframe, text="파라미터")
         bar = ttk.Frame(pframe, padding=4)
         bar.pack(fill="x")
         ttk.Button(bar, text="YAML로 저장...", command=self.save_vehicle).pack(side="left")
         ttk.Button(bar, text="되돌리기", command=self.load_vehicle).pack(side="left", padx=4)
-        ttk.Label(bar, text="파란색 = 바꾼 값", foreground="#0050c8").pack(side="left", padx=8)
-        ttk.Checkbutton(bar, text="공력 장치 상세 (위치·지상고·코드·갭·냉각 ...)", variable=self.aero_detail_var,
+        ttk.Checkbutton(bar, text="공력 장치 상세", variable=self.aero_detail_var,
                         command=self._layout_params).pack(side="left", padx=4)
-        tbar = ttk.Frame(pframe, padding=(4, 0))
+        ttk.Label(bar, text="파란색 = 바꾼 값", foreground="#0050c8").pack(side="right")
+        tbar = ttk.Frame(pframe, padding=(4, 0, 4, 4))
         tbar.pack(fill="x")
-        ttk.Label(tbar, text="타이어 모델").pack(side="left")
+        ttk.Label(tbar, text="타이어").pack(side="left")
         self.tire_label = ttk.Label(tbar, text="단순", foreground="#666")
         self.tire_label.pack(side="left", padx=4)
-        ttk.Button(tbar, text="Magic Formula .tir...", command=self.pick_tir).pack(side="left", padx=4)
-        ttk.Button(tbar, text="단순 타이어로", command=lambda: self.set_tir(None)).pack(side="left")
-        canvas = tk.Canvas(pframe, highlightthickness=0)
-        sb = ttk.Scrollbar(pframe, orient="vertical", command=canvas.yview)
-        self.param_frame = ttk.Frame(canvas)
-        self.param_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=self.param_frame, anchor="nw")
-        canvas.configure(yscrollcommand=sb.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", lambda ev: canvas.yview_scroll(
-            -1 if ev.delta > 0 else 1, "units")))
-        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        ttk.Button(tbar, text="단순으로", command=lambda: self.set_tir(None)).pack(side="right")
+        ttk.Button(tbar, text=".tir 열기...", command=self.pick_tir).pack(side="right", padx=4)
+        self.param_frame = self._scrollable(pframe)
 
         # --- results: text / graphs / history
         tf = ttk.Frame(right)
@@ -315,8 +305,8 @@ class App:
         hbar.pack(fill="x")
         ttk.Button(hbar, text="CSV로 저장...", command=self.save_history).pack(side="left")
         ttk.Button(hbar, text="기록 지우기", command=self.clear_history).pack(side="left", padx=4)
-        ttk.Label(hbar, text="계산할 때마다 한 줄씩 쌓입니다 - 파라미터를 바꾸기 전후를 비교하세요.",
-                  foreground="#666").pack(side="left", padx=8)
+        ttk.Button(hbar, text="한 랩 결과 나란히 비교", command=self.compare_laps).pack(side="left")
+        ttk.Label(hbar, text="계산마다 한 줄씩 쌓임", foreground="#666").pack(side="left", padx=8)
         cols = ("time", "task", "result", "changes", "setup")
         self.tree = ttk.Treeview(hf, columns=cols, show="headings")
         for c, (label, width) in zip(cols, (("시각", 70), ("계산", 130), ("결과", 430), ("바꾼 파라미터 (원래 값)", 300),
@@ -330,6 +320,28 @@ class App:
         hxs.pack(side="bottom", fill="x")
         self.tree.pack(fill="both", expand=True)
         self.result_tabs = right
+
+    @staticmethod
+    def _scrollable(parent) -> ttk.Frame:
+        """A vertically scrolling frame filling ``parent``; its width follows the window."""
+        canvas = tk.Canvas(parent, highlightthickness=0)
+        sb = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas, padding=8)
+        win = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(win, width=e.width))
+        canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", lambda ev: canvas.yview_scroll(
+            -1 if ev.delta > 0 else 1, "units")))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        return inner
+
+    def _scroll_tab(self, notebook: ttk.Notebook, text: str) -> ttk.Frame:
+        outer = ttk.Frame(notebook)
+        notebook.add(outer, text=text)
+        return self._scrollable(outer)
 
     def _task_button(self, parent, key: str, label: str | None = None) -> ttk.Button:
         b = ttk.Button(parent, text=label or TASKS[key][0], command=lambda: self.run_task(key))
@@ -608,6 +620,71 @@ class App:
         else:
             self.track_var.set(out)
 
+    # ------------------------------------------------------------------ extra tools window (every CLI command)
+    def open_tools(self):
+        if getattr(self, "tools_win", None) is not None and self.tools_win.winfo_exists():
+            self.tools_win.lift()
+            return
+        cmds = cli_commands()
+        names = [f"{c} - {CLI_LABELS.get(c, (p.description or '').split(chr(10))[0] or c)}" for c, p in cmds.items()]
+        win = self.tools_win = tk.Toplevel(self.root)
+        win.title("aerolap 추가 도구 - CLI 명령 전체")
+        win.geometry("900x620")
+        top = ttk.Frame(win, padding=8)
+        top.pack(fill="x")
+        ttk.Label(top, text="명령").pack(side="left")
+        sel = tk.StringVar(value=names[0])
+        ttk.Combobox(top, textvariable=sel, values=names, state="readonly", width=70).pack(side="left", padx=6)
+        ttk.Label(win, text=f"'{CURRENT_VEHICLE}' =메인 창에서 편집 중인 차량. 여러 값은 ';'로 구분. "
+                            "결과는 메인 창의 결과/그래프/비교 기록 탭에 나옵니다.",
+                  foreground="#666", padding=(8, 0)).pack(anchor="w")
+        body = ttk.Frame(win, padding=8)
+        body.pack(fill="both", expand=True)
+        state: dict = {}
+
+        def build(*_):
+            for w in body.winfo_children():
+                w.destroy()
+            cmd = sel.get().split(" - ", 1)[0]
+            fields = cli_fields(cmds[cmd], track=self.track_var.get())
+            state.update(cmd=cmd, fields=fields, vars={})
+            for r, f in enumerate(fields):
+                name = f.flag or f.dest
+                ttk.Label(body, text=name).grid(row=r, column=0, sticky="w", pady=1)
+                if f.kind == "flag":
+                    v = tk.BooleanVar(value=(f.dest == "coarse" and self.coarse_var.get()) or f.default == "1")
+                    ttk.Checkbutton(body, variable=v).grid(row=r, column=1, sticky="w")
+                else:
+                    d = self.level_var.get() if f.dest == "level" else f.default
+                    v = tk.StringVar(value=d)
+                    if f.kind == "choice":
+                        ttk.Combobox(body, textvariable=v, values=[""] + [str(c) for c in f.choices],
+                                     state="readonly", width=40).grid(row=r, column=1, sticky="we")
+                    else:
+                        ttk.Entry(body, textvariable=v, width=60).grid(row=r, column=1, sticky="we")
+                        ttk.Button(body, text="...", width=3,
+                                   command=lambda v=v, f=f: self._pick_into(v, f.multi)).grid(row=r, column=2)
+                state["vars"][f.dest] = v
+                ttk.Label(body, text=(f.help or "")[:80], foreground="#666").grid(row=r, column=3, sticky="w", padx=6)
+            body.columnconfigure(1, weight=1)
+
+        def run():
+            vals = {d: ("1" if v.get() is True else "" if v.get() is False else v.get())
+                    for d, v in state["vars"].items()}
+            self.run_task("cli", {"cli_command": state["cmd"], "cli_values": vals})
+
+        sel.trace_add("write", build)
+        btn = ttk.Button(top, text="실행", command=run)
+        btn.pack(side="left", padx=6)
+        self.task_buttons.append(btn)
+        win.protocol("WM_DELETE_WINDOW", lambda: (self.task_buttons.remove(btn), win.destroy()))
+        build()
+
+    def _pick_into(self, var, multi: bool):
+        p = filedialog.askopenfilename(initialdir=ROOT / "data")
+        if p:
+            var.set(f"{var.get()};{p}" if multi and var.get().strip() else p)
+
     def import_options(self, suf: str) -> dict | None:
         """Modal choice of the import variant; None = cancelled."""
         win = tk.Toplevel(self.root)
@@ -680,21 +757,23 @@ class App:
             kw["sweep_lo"], kw["sweep_hi"] = float(self.sw_lo_var.get()), float(self.sw_hi_var.get())
         return kw
 
-    def run_task(self, key: str):
+    def run_task(self, key: str, extra: dict | None = None):
         if self.busy:
             return
         self.clear_error_marks()
         try:
             cfg = self.current_cfg()
-            kw = self.task_kwargs()
+            kw = {**self.task_kwargs(), **(extra or {})}
             for msg in unknown_keys(cfg):
                 self._log(f"경고: {msg}")
         except Exception as exc:  # noqa: BLE001
             self.report_error(exc, "입력 오류")
             return
         label, fn = TASKS[key]
+        if key == "cli":
+            label = CLI_LABELS.get(kw["cli_command"], f"aerolap {kw['cli_command']}")
         track, level, coarse = self.track_var.get(), self.level_var.get(), self.coarse_var.get()
-        out_dir = OUT / key
+        out_dir = run_dir(kw["cli_command"] if key == "cli" else RECORD_KIND.get(key, key.replace("_", "-")))
         meta = {"task": label, "changes": changed_params(cfg, self.cfg),
                 "setup": f"{Path(self.vehicle_var.get()).stem} / {Path(track).stem} / {level}"
                          + (" / 빠른 계산" if coarse else "")}
@@ -710,6 +789,8 @@ class App:
         def work():
             try:
                 res = fn(cfg, track, level, coarse, out_dir, log=log, **kw)
+                if not (out_dir / RUN_BOOK).exists():  # one record sheet per run folder
+                    write_run_book(out_dir, text_rows(label, res.text))
                 self.queue.put(("done", (res, meta)))
             except TaskCancelled:
                 self.queue.put(("cancelled", label))
@@ -799,6 +880,9 @@ class App:
         row = {"time": time.strftime("%H:%M:%S"), "task": meta["task"], "result": res.summary,
                "changes": meta["changes"] or "-", "setup": meta["setup"]}
         self.history.append(row)
+        if isinstance(res.data, LapReport):  # kept for "한 랩 결과 나란히 비교"
+            res.data.label = f"{row['time']} {meta['setup']}" + (f" | {meta['changes']}" if meta["changes"] else "")
+            self.lap_reports.append(res.data)
         self.tree.insert("", "end", values=[row[c] for c in ("time", "task", "result", "changes", "setup")])
         self.tree.yview_moveto(1.0)
 
@@ -816,8 +900,17 @@ class App:
             w.writeheader()
             w.writerows(self.history)
 
+    def compare_laps(self):
+        if not self.lap_reports:
+            self._log("비교할 한 랩 결과가 없습니다 - '한 랩'을 파라미터를 바꿔 가며 두 번 이상 계산하세요.")
+            return
+        self.text.delete("1.0", "end")
+        self.text.insert("1.0", "[한 랩 결과 비교 - 괄호는 #1 대비 변화]\n\n" + compare_table(self.lap_reports))
+        self.result_tabs.select(0)
+
     def clear_history(self):
         self.history.clear()
+        self.lap_reports.clear()
         self.tree.delete(*self.tree.get_children())
 
     # ------------------------------------------------------------------ helpers
@@ -838,8 +931,8 @@ class App:
         self.log.see("end")
 
     def open_out(self):
-        OUT.mkdir(parents=True, exist_ok=True)
-        _open_path(OUT)
+        records_root().mkdir(parents=True, exist_ok=True)
+        _open_path(records_root())
 
 
 def main() -> int:

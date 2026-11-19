@@ -15,15 +15,14 @@ CAR = ROOT / "data" / "vehicles" / "fsk2026.yaml"
 TRACK = ROOT / "data" / "tracks" / "fsk2026_endurance_smoothed.csv"
 
 
-def test_no_aero_car_has_no_downforce_keeps_cooling_and_is_lighter():
+def test_no_aero_car_has_no_downforce_keeps_body_drag_and_is_lighter():
     cfg = load_vehicle_config(CAR)
     bare, notes = no_aero_cfg(cfg, aero_mass_kg=8.0)
     car, base = VehicleModel(bare), VehicleModel(cfg)
     cf, cr, cd, _ = car.static_aero()
     assert float(cf + cr) == pytest.approx(0.0, abs=1e-9)
-    assert 0.0 < float(cd) < float(base.static_aero()[2])  # sidepod / body drag stays, wing drag goes
+    assert 0.0 < float(cd) < float(base.static_aero()[2])  # body drag stays, wing drag goes
     assert car.m == pytest.approx(base.m - 8.0)
-    assert bare["aero"]["components"]["sidepod"].get("enabled", True)
     assert any("front" in n for n in notes)
 
 

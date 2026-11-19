@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from aerolap.cli import main
-from aerolap.config import ConfigError, load_vehicle_config
+from aerolap.config import ConfigError, load_vehicle_config, with_overrides
 from aerolap.features import features_for_level
 from aerolap.importers import (read_ac_ai, read_optimumlap_track, read_optimumlap_vehicle, track_from_ac,
                                track_from_optimumlap)
@@ -198,7 +198,9 @@ def test_yaml_linked_to_an_olveh(tmp_path):
     """optimumlap: in a YAML reads the chosen groups from the file and keeps the rest of the YAML."""
     linked = load_vehicle_config(ROOT / "data" / "vehicles" / "fsk2026_olveh_link.yaml", warn=False)
     ref = load_vehicle_config(ROOT / "data" / "vehicles" / "fsk2026.yaml", warn=False)
-    assert _strip(linked) == _strip(ref)  # fsk2026.yaml was imported from the same file
+    # fsk2026.yaml was imported from the same file; the team's final drive (4.04) has since replaced its 4.0
+    same_drive = with_overrides(ref, {"powertrain.ev.reduction_ratio": linked["powertrain"]["ev"]["reduction_ratio"]})
+    assert _strip(linked) == _strip(same_drive)
     raw = OLVEH.read_bytes().replace(struct.pack("<d", 310.0), struct.pack("<d", 295.0), 1)
     (tmp_path / "car.olveh").write_bytes(raw)
     (tmp_path / "car.yaml").write_text(
@@ -238,3 +240,54 @@ def test_optimumlap_spiral_radius():
     lo, hi = sorted((ol.radii[i], ol.radii[i + 1]))
     pieces = [r for (kind, length, r, d) in spiral if kind == "corner" and lo - 1e-9 <= r <= hi + 1e-9]
     assert any(lo < r < hi for r in pieces)  # radii in between appear only with the spiral reading
+
+
+def test_hardpoint_workbook_drives_the_geometry(tmp_path):
+    openpyxl = pytest.importorskip("openpyxl")
+    import yaml
+
+    DATA = Path(__file__).resolve().parents[1] / "data"
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "지오메트리 정보"
+    for row in (["리어 접지점", -620, 600, -49], ["리어 휠센터", -620, 600, 183], ["휠베이스", 1550],
+                ["CG 높이", 310], ["트레드(윤거)", 1210, 1190], ["앞 무게 배분", 0.47], ["롤센터 높이", 30, 50],
+                ["안티다이브(앞) / 안티리프트(뒤) 계수", 0.3, 0.5], ["측면 IC X", -4000, 2880],
+                ["측면 IC 높이", 300, 300]):
+        ws.append([None] + row)
+    wb.save(tmp_path / "hp.xlsx")
+    raw = yaml.safe_load((DATA / "vehicles" / "fsk2026.yaml").read_text(encoding="utf-8"))
+    raw["hardpoints"] = {"file": "hp.xlsx", "brake_share_front": 0.6}
+    raw.pop("optimumlap", None)
+    (tmp_path / "car.yaml").write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    cfg = load_vehicle_config(tmp_path / "car.yaml", warn=False)
+    assert cfg["geometry"]["wheelbase_mm"] == 1550 and cfg["geometry"]["track_rear_mm"] == 1190
+    assert cfg["mass"]["cg_height_mm"] == 310 and cfg["mass"]["weight_dist_front"] == 0.47
+    assert cfg["suspension"]["front"]["anti_dive"] == pytest.approx(0.18)
+    assert cfg["suspension"]["rear"]["anti_lift"] == pytest.approx(0.2)
+    # rear IC 68 mm above the 232 mm wheel centre, 3500 mm ahead of it; h / L = 0.2
+    assert cfg["suspension"]["rear"]["anti_squat"] == pytest.approx(68 / 3500 / 0.2, abs=1e-4)
+    assert not cfg["_warnings"]
+    # saved into another folder (GUI save) or used as a base from there: the workbook link still resolves
+    from aerolap.config import dump_config
+
+    (tmp_path / "saved").mkdir()
+    dump_config(cfg, tmp_path / "saved" / "car.yaml")
+    moved = load_vehicle_config(tmp_path / "saved" / "car.yaml", warn=False)
+    assert moved["mass"]["cg_height_mm"] == 310 and not any("hardpoint" in w for w in moved["_warnings"])
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "variant.yaml").write_text("base: ../car.yaml\nname: variant\n", encoding="utf-8")
+    var = load_vehicle_config(tmp_path / "sub" / "variant.yaml", warn=False)
+    assert var["geometry"]["wheelbase_mm"] == 1550 and not any("hardpoint" in w for w in var["_warnings"])
+
+
+def test_assetto_corsa_bank_is_opt_in(tmp_path):
+    sp = read_ac_ai(AC_FSK)
+    assert sp.camber is not None and np.max(np.abs(sp.camber)) > 0.0
+    assert Track.from_file(AC_FSK).bank is None  # sign of the AC camber not verified: off by default
+    assert track_from_ac(AC_FSK, bank=True).bank is not None
+    plain, banked = tmp_path / "plain.csv", tmp_path / "banked.csv"
+    assert main(["import-track", str(AC_FSK), "--out", str(plain)]) == 0
+    assert main(["import-track", str(AC_FSK), "--out", str(banked), "--bank"]) == 0
+    assert Track.from_file(plain).bank is None and Track.from_file(banked).bank is not None

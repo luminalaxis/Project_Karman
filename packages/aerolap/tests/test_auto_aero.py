@@ -34,7 +34,7 @@ def test_switched_off_device_leaves_the_car_with_its_mass():
     cfg = load_vehicle_config(CAR)
     off = with_overrides(cfg, {"aero.components.side.enabled": False, "aero.components.side.mass_kg": 2.5})
     car0, car1 = VehicleModel(cfg), VehicleModel(off)
-    assert [c.name for c in car1.aero.components] == ["front", "sidepod", "rear"]
+    assert [c.name for c in car1.aero.components] == ["front", "rear"]
     assert car1.m == pytest.approx(car0.m - 2.5)
     assert sum(car1.aero.component_totals()[:2]) < sum(car0.aero.component_totals()[:2])
     assert unknown_keys(off) == []  # enabled / mass_kg are known keys
@@ -77,7 +77,7 @@ def test_design_space_fix_patterns_bounds_and_errors():
     assert not by["front.elements.flap2.gap_mm"].fixed and not by["front.aoa_deg"].fixed
     assert (by["front.elements.main.chord_mm"].lo, by["front.elements.main.chord_mm"].hi) == (150, 190)
     opts = {o.name for o in sp.options}
-    assert "side.enabled" in opts and "rear.elements.flap2.enabled" in opts and "sidepod.enabled" not in opts
+    assert "side.enabled" in opts and "rear.elements.flap2.enabled" in opts
     with pytest.raises(ValueError, match="matches no"):
         design_space(cfg, ["front.elements.flap9.gap_mm"])
     with pytest.raises(ValueError, match="upper bound"):
@@ -102,7 +102,7 @@ def test_pattern_search_finds_a_quadratic_minimum():
 # ---------------------------------------------------------------- auto-aero
 def test_auto_aero_keeps_the_fixed_parameters_and_does_not_get_worse():
     cfg = load_vehicle_config(CAR)
-    fixed = ["rear", "side", "sidepod", "@position", "@chord", "@slot", "*.span_m"]
+    fixed = ["rear", "side", "@position", "@chord", "@slot", "*.span_m"]
     res = auto_aero(cfg, {"type": "lap_time", "track": str(TRACK)}, ".", {"understeer_index": [1.0, 1.3]},
                     fixed, options=True, max_evals=40)
     assert res.best_eval.feasible and res.best_eval.value <= res.initial_eval.value + 1e-9

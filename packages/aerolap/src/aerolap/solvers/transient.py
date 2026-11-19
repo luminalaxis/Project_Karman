@@ -417,6 +417,7 @@ class TransientSolver:
         lat_on = o.lateral_dof
         tire = car.tire
         mf_tyre = getattr(tire, "model", "simple") != "simple"
+        mf_offsets = mf_tyre and bool(car.cfg["tires"].get("mf_offsets", False))
         alpha_pk = tire.peak_slip
         spin_rad = math.radians(o.spin_sideslip_deg)
         slide_warn = math.radians(o.slide_sideslip_deg)
@@ -544,8 +545,7 @@ class TransientSolver:
                     _, fyc = car.tire.capacity(fz_oi[:, 0], inc_oi[:, 0], cam_oi[:, 0])
                 else:
                     _, fyc = car.tire.capacity(fz_oi[:, 0])
-                if heat is not None:
-                    fyc = fyc * car.tyre_grip
+                fyc = fyc * car.tyre_grip  # tyre temperature window: fixed temperature_C or the thermal model
                 cap_f, cap_r = float(fyc[0] + fyc[1]), float(fyc[2] + fyc[3])
                 fz_t = fz_oi[:, 0]
                 if mf_tyre:  # load-dependent slip curve and peak slip of each axle
@@ -560,8 +560,11 @@ class TransientSolver:
                 alpha_f = delta + rs_f - (vy + car.a * yaw_rate) / vx
                 alpha_r = rs_r - (vy - car.b * yaw_rate) / vx
                 # conicity / ply steer (MF PHY / PVY): the same on every wheel, vehicle frame
-                shy_f, svy_f = tire.lateral_offset(0.5 * (fz_t[0] + fz_t[1]))
-                shy_r, svy_r = tire.lateral_offset(0.5 * (fz_t[2] + fz_t[3]))
+                if mf_offsets:  # opt-in: tires.mf_offsets
+                    shy_f, svy_f = tire.lateral_offset(0.5 * (fz_t[0] + fz_t[1]))
+                    shy_r, svy_r = tire.lateral_offset(0.5 * (fz_t[2] + fz_t[3]))
+                else:
+                    shy_f = svy_f = shy_r = svy_r = 0.0
                 # caps are ordered outside / inside of the turn; the force is odd in alpha (vehicle frame)
                 fyf = tire.axle_lateral_force(alpha_f + shy_f, fyc[0:2], fz_t[0:2]) + 2.0 * svy_f
                 fyr = tire.axle_lateral_force(alpha_r + shy_r, fyc[2:4], fz_t[2:4]) + 2.0 * svy_r

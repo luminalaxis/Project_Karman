@@ -44,6 +44,10 @@ class Tire:
 
     @classmethod
     def from_config(cls, t: dict) -> "Tire":
+        from .config import DEFAULTS
+
+        # a null simple-tyre key (left blank by an MF vehicle that does not use it) takes the default
+        t = {**t, **{k: v for k, v in DEFAULTS["tires"].items() if t.get(k) is None and v is not None}}
         return cls(
             radius=float(t["radius_mm"]) / 1000.0,
             mu_x=float(t["mu_x"]),

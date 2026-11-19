@@ -43,12 +43,11 @@ def test_aero_split_study():
     cfg = load_vehicle_config(CAR)
     spec = {"type": "lap_time", "track": str(TRACK), "level": "L4"}
     # a device name brings all its variables (main aoa + flap angles), a variable name just that one
-    res = aero_split(cfg, spec, constraints={"understeer_index": [1.0, 1.3]}, names=["front", "rear.flap1", "sidepod"],
+    res = aero_split(cfg, spec, constraints={"understeer_index": [1.0, 1.3]}, names=["front", "rear.flap1"],
                      points=3, max_evals=12, opts=SolverOptions.coarse())
-    assert res.names == ["front", "front.flap1", "front.flap2", "rear.flap1", "sidepod"]
+    assert res.names == ["front", "front.flap1", "front.flap2", "rear.flap1"]
     assert res.paths["front"].endswith("front.aoa_deg")
     assert res.paths["rear.flap1"] == "aero.components.rear.elements.flap1.deflection_deg"
-    assert res.paths["sidepod"].endswith("exit_area_m2") and res.units["sidepod"] == "m2"
     assert res.values["front"][0] == pytest.approx(-4.0)
     assert res.values["front.flap1"][0] == pytest.approx(0.0) and res.values["front.flap2"][-1] == pytest.approx(50.0)
     with pytest.raises(ValueError, match="front.flap9"):

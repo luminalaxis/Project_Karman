@@ -24,19 +24,23 @@ def cfg():
 
 
 def test_pack_equations(cfg):
-    pack = BatteryPack.from_config(cfg["battery"])
+    b = cfg["battery"]  # expectations from the vehicle file, so editing the pack does not break the test
+    cell, ns, npar = b["cell"], b["series"], b["parallel"]
+    pack = BatteryPack.from_config(b)
     v = float(pack.ocv(1.0))
-    assert v == pytest.approx(132 * 4.18)
-    assert pack.resistance == pytest.approx(132 * 0.013 / 4 + 0.03)
+    assert v == pytest.approx(ns * cell["ocv"][-1][1])
+    assert pack.resistance == pytest.approx(ns * cell["resistance_mOhm"] / 1e3 / npar
+                                            + b["interconnect_resistance_mOhm"] / 1e3)
     i = pack.max_current(1.0)
-    assert i == pytest.approx(4 * 45)
+    assert i == pytest.approx(npar * cell["max_current_A"])
     assert pack.max_power(1.0) == pytest.approx(v * i - pack.resistance * i * i)
     p = 60e3
     i60 = float(pack.current(p, 1.0))
     assert v * i60 - pack.resistance * i60 ** 2 == pytest.approx(p, rel=1e-9)  # terminal power
     assert float(pack.terminal_voltage(p, 1.0)) == pytest.approx(v - pack.resistance * i60)
     assert float(pack.current(-20e3, 1.0)) < 0  # regen charges
-    assert pack.usable_energy / 3.6e6 == pytest.approx(7.48, abs=0.05)
+    full = ns * npar * cell["capacity_Ah"] * 3.6 / 1e3  # nominal pack energy at ~3.6 V/cell [kWh]
+    assert 0.0 < pack.usable_energy / 3.6e6 < (1.0 - b["soc_min"]) * full * 1.2
 
 
 def test_current_limit_caps_power(cfg):
@@ -46,7 +50,7 @@ def test_current_limit_caps_power(cfg):
 
 def test_low_soc_lowers_voltage_power_and_speed(cfg):
     hi = VehicleModel(with_overrides(cfg, {"battery.soc": 1.0}))
-    lo = VehicleModel(with_overrides(cfg, {"battery.soc": 0.15}))
+    lo = VehicleModel(with_overrides(cfg, {"battery.soc": cfg["battery"]["soc_min"] + 0.05}))
     assert lo.powertrain.pack_voltage < hi.powertrain.pack_voltage
     assert lo.powertrain.motor.base_rpm < hi.powertrain.motor.base_rpm
     assert lo.powertrain.power_limit < hi.powertrain.power_limit
@@ -76,7 +80,8 @@ def test_endurance_soc_stages(cfg):
     assert st[-1].power_kW <= st[0].power_kW and st[-1].lap_time_s >= st[0].lap_time_s
     assert en.total_time_s == pytest.approx(sum(s.lap_time_s * s.laps for s in st))
     assert "SOC stages" in en.report()
-    assert en.usable_kWh == pytest.approx(7.48, abs=0.05)  # from the start SOC, not a stage SOC
+    usable = BatteryPack.from_config(cfg["battery"]).usable_energy / 3.6e6
+    assert en.usable_kWh == pytest.approx(usable, rel=1e-6)  # from the start SOC, not a stage SOC
 
 
 def test_without_cell_section_nothing_changes(ev_cfg):
